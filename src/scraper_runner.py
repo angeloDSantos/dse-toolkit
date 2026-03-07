@@ -112,7 +112,8 @@ def _run_scrape(session_id: int, config: dict):
     global _active_session_id
 
     # Import scraper modules
-    from src.driver import create_driver, settle, wait_for_page, auto_login, prompt_mfa_web
+    from src.driver import create_driver, settle, wait_for_page, auto_login, submit_mfa_code
+    from src.driver import _is_mfa_page, _is_logged_in
     from src.signals import Controls, SkipEventSignal, QuitSignal
     from src.filters import (
         expand_keywords, record_passes_filter, is_zmtbe,
@@ -148,26 +149,47 @@ def _run_scrape(session_id: int, config: dict):
         _log_event(session_id, "status", reason="Logging in to Salesforce...")
         auto_login(driver, SF_USERNAME, SF_PASSWORD)
 
-        # Handle MFA — wait for the web UI to provide the code
-        _log_event(session_id, "mfa_required", reason="Enter MFA code in the web UI")
-        _update_session(session_id, status="mfa_required")
+        # Check if MFA is actually needed (might already be logged in)
+        import time as _time
+        _time.sleep(2)  # Let page settle after login submit
 
-        # Poll for MFA code from web UI (stored as file signal)
-        mfa_code = _wait_for_mfa_code(session_id)
-        if mfa_code is None:
-            _log_event(session_id, "status", reason="Scrape cancelled during MFA")
-            _update_session(session_id, status="stopped",
+        if _is_logged_in(driver):
+            _log_event(session_id, "status", reason="Already logged in — no MFA needed")
+        elif _is_mfa_page(driver):
+            # MFA required — wait for code from web UI
+            _log_event(session_id, "mfa_required", reason="Enter MFA code in the web UI")
+            _update_session(session_id, status="mfa_required")
+
+            mfa_code = _wait_for_mfa_code(session_id)
+            if mfa_code is None:
+                _log_event(session_id, "status", reason="Scrape cancelled during MFA")
+                _update_session(session_id, status="stopped",
+                               finished_at=datetime.now().isoformat())
+                return
+
+            submit_mfa_code(driver, mfa_code)
+
+            # Verify MFA worked
+            _time.sleep(3)
+            if not _is_logged_in(driver):
+                _log_event(session_id, "error",
+                           reason="MFA code rejected — login failed")
+                _update_session(session_id, status="error",
+                               finished_at=datetime.now().isoformat())
+                return
+
+            _log_event(session_id, "status", reason="MFA verified — login complete")
+        else:
+            _log_event(session_id, "error",
+                       reason=f"Login page in unknown state: {driver.current_url}")
+            _update_session(session_id, status="error",
                            finished_at=datetime.now().isoformat())
             return
 
-        # Submit MFA code
-        from src.driver import submit_mfa_code
-        submit_mfa_code(driver, mfa_code)
-
-        _log_event(session_id, "status", reason="MFA verified — login complete")
         _update_session(session_id, status="running")
 
-        # Create controls (check stop_event instead of signal file)
+        # Controls (for poll/pause in navigation helpers — uses signal file,
+        # but we also check _stop_event directly)
         ctrl = Controls()
 
         # Process entities
