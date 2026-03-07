@@ -3,14 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}DSE Toolkit{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>{% block title %}Imperium{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    {% block head %}{% endblock %}
 </head>
 <body>
     <aside class="sidebar">
         <div class="sidebar-logo">
-            <span class="logo-icon">⚡</span>
-            <span class="logo-text">DSE Toolkit</span>
+            <div class="logo-icon">I</div>
+            <div class="logo-text">
+                <span class="logo-name">Imperium</span>
+                <span class="logo-subtitle">Delegate Command</span>
+            </div>
         </div>
         <nav class="sidebar-nav">
             <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
@@ -20,7 +24,7 @@
                 <span class="nav-icon">👥</span> Contacts
             </a>
             <a href="/scraper" class="nav-item {% if '/scraper' in request.path %}active{% endif %}">
-                <span class="nav-icon">🔍</span> CRM Scraper
+                <span class="nav-icon">🔮</span> CRM Scraper
             </a>
             <a href="/campaigns" class="nav-item {% if '/campaigns' in request.path %}active{% endif %}">
                 <span class="nav-icon">🎯</span> Campaigns
@@ -28,8 +32,8 @@
             <a href="/outreach" class="nav-item {% if '/outreach' in request.path %}active{% endif %}">
                 <span class="nav-icon">🚀</span> Outreach Tools
             </a>
-            <a href="/replies" class="nav-item {% if '/replies' in request.path %}active{% endif %}">
-                <span class="nav-icon">💬</span> Replies
+            <a href="/messages" class="nav-item {% if '/messages' in request.path or '/replies' in request.path %}active{% endif %}">
+                <span class="nav-icon">💬</span> Messages
             </a>
             <a href="/activity" class="nav-item {% if '/activity' in request.path %}active{% endif %}">
                 <span class="nav-icon">📋</span> Activity Log
@@ -39,23 +43,21 @@
             </a>
         </nav>
         <div class="sidebar-footer">
-            <span class="version">v2.0 — Local Mode</span>
+            <div class="version">v2.0 — Local Mode</div>
         </div>
     </aside>
 
     <main class="main-content">
         <header class="topbar">
-            <h1 class="page-title">{% block page_title %}Dashboard{% endblock %}</h1>
-            <div class="topbar-right">
-                <span class="status-badge" id="server-status">● Online</span>
-            </div>
+            <h1 class="page-title">{% block page_title %}{% endblock %}</h1>
+            <div class="status-badge">Online</div>
         </header>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
         <div class="flash-container">
-            {% for category, message in messages %}
-            <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% for cat, msg in messages %}
+            <div class="flash flash-{{ cat }}">{{ msg }}</div>
             {% endfor %}
         </div>
         {% endif %}
@@ -65,7 +67,5 @@
             {% block content %}{% endblock %}
         </div>
     </main>
-
-    <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

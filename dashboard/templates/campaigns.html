@@ -1,82 +1,88 @@
 {% extends "layout.html" %}
-{% block title %}Campaigns — DSE Toolkit{% endblock %}
-{% block page_title %}Campaigns{% endblock %}
+{% block title %}Campaigns — Imperium{% endblock %}
+{% block page_title %}Strategic Campaigns{% endblock %}
 
 {% block content %}
-<div class="section-header">
+<div class="section-header animate-in">
     <div></div>
     <button class="btn btn-primary btn-sm"
             onclick="document.getElementById('new-campaign-modal').style.display='flex'">
-        + New Campaign
+        + Create New Campaign
     </button>
 </div>
 
 {% if campaigns %}
 <div class="tool-grid">
     {% for c in campaigns %}
-    <div class="tool-card">
+    <div class="tool-card animate-in" style="animation-delay: {{ loop.index0 * 50 }}ms;">
         <div class="tool-name">{{ c.name }}</div>
-        <div class="tool-desc">
-            {% if c.summit_name %}Summit: {{ c.summit_name }}<br>{% endif %}
-            {% if c.city %}Location: {{ c.city }}<br>{% endif %}
-            {% if c.dates %}Dates: {{ c.dates }}<br>{% endif %}
-            {% if c.audience %}Audience: {{ c.audience }}{% endif %}
+        <div class="tool-desc" style="font-size:12px; line-height:1.6;">
+            {% if c.summit_name %}<div style="display:flex; justify-content:space-between;"><span class="text-muted">Summit:</span> <span class="text-accent">{{ c.summit_name }}</span></div>{% endif %}
+            {% if c.city %}<div style="display:flex; justify-content:space-between;"><span class="text-muted">Location:</span> <span>{{ c.city }}</span></div>{% endif %}
+            {% if c.dates %}<div style="display:flex; justify-content:space-between;"><span class="text-muted">Schedule:</span> <span class="text-mono">{{ c.dates }}</span></div>{% endif %}
+            {% if c.audience %}<div style="margin-top:8px; border-top:1px solid var(--border); padding-top:8px;"><span class="text-muted">Audience:</span><br>{{ c.audience }}</div>{% endif %}
         </div>
-        <div>
+        <div class="tool-actions">
             <span class="badge badge-green">{{ c.status }}</span>
+            <button class="btn btn-outline btn-xs" style="margin-left:auto;">Edit</button>
         </div>
     </div>
     {% endfor %}
 </div>
 {% else %}
-<div class="card">
+<div class="card animate-in">
     <div class="empty-state">
         <div class="empty-icon">🎯</div>
-        <div class="empty-text">No campaigns yet — create one to start tracking outreach</div>
+        <div class="empty-text">No active campaigns — create a new mission to track your outreach progress</div>
     </div>
 </div>
 {% endif %}
 
 <!-- New Campaign Modal -->
-<div id="new-campaign-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.6);
+<div id="new-campaign-modal" style="display:none; position:fixed; inset:0; background:rgba(6,8,15,0.85); backdrop-filter: blur(8px);
      justify-content:center; align-items:center; z-index:100;"
      onclick="if(event.target===this)this.style.display='none'">
-    <div class="card" style="width:500px; margin:0;">
-        <div class="card-title">Create New Campaign</div>
+    <div class="card" style="width:500px; margin:0; border-color:var(--accent); box-shadow:var(--shadow-lg);">
+        <div class="card-title">Launch New Campaign</div>
         <form action="/campaigns/create" method="post">
             <div class="form-group">
-                <label class="form-label">Campaign Name</label>
-                <input type="text" name="name" class="form-input" required placeholder="e.g. CMO Europe Q2">
+                <label class="form-label">Campaign Identity (Unique Name)</label>
+                <input type="text" name="name" class="form-input" required placeholder="e.g. CMO_Amsterdam_2026_Q2">
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label class="form-label">Summit Name</label>
-                    <input type="text" name="summit_name" class="form-input" placeholder="e.g. CMO Summit EU">
+                    <label class="form-label">Template Summit</label>
+                    <select name="summit_name" class="form-select">
+                        <option value="">(Manual Details)</option>
+                        {% for s in summits %}
+                        <option value="{{ s.name }}">{{ s.name }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Venue</label>
-                    <input type="text" name="venue" class="form-input" placeholder="e.g. The Ritz-Carlton">
+                    <label class="form-label">Target City</label>
+                    <input type="text" name="city" class="form-input" placeholder="e.g. London">
                 </div>
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label class="form-label">City</label>
-                    <input type="text" name="city" class="form-input" placeholder="e.g. Barcelona">
+                    <label class="form-label">Venue / Base</label>
+                    <input type="text" name="venue" class="form-input" placeholder="e.g. ExCeL London">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Dates</label>
-                    <input type="text" name="dates" class="form-input" placeholder="e.g. 15-17 May 2026">
+                    <label class="form-label">Operation Dates</label>
+                    <input type="text" name="dates" class="form-input" placeholder="e.g. 10-12 Nov 2026">
                 </div>
             </div>
             <div class="form-group">
-                <label class="form-label">Target Audience</label>
+                <label class="form-label">Audience Persona</label>
                 <input type="text" name="audience" class="form-input"
-                       placeholder="e.g. VP/Director Marketing, Europe">
+                       placeholder="e.g. C-Level IT Executives (EMEA)">
             </div>
-            <div style="display:flex; gap:10px; justify-content:flex-end;">
+            <div style="display:flex; gap:12px; justify-content:flex-end; margin-top:12px;">
                 <button type="button" class="btn btn-outline btn-sm"
                         onclick="document.getElementById('new-campaign-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary btn-sm">Create Campaign</button>
+                <button type="submit" class="btn btn-primary btn-sm">Initialize Campaign</button>
             </div>
         </form>
     </div>

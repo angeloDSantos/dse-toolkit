@@ -1,27 +1,29 @@
 {% extends "layout.html" %}
-{% block title %}Contacts — DSE Toolkit{% endblock %}
-{% block page_title %}Contacts{% endblock %}
+{% block title %}Contacts — Imperium{% endblock %}
+{% block page_title %}Contacts Library{% endblock %}
 
 {% block content %}
-<div class="section-header">
-    <form action="/contacts" method="get" style="display:flex; gap:10px; align-items:center;">
-        <input type="text" name="q" value="{{ search }}" placeholder="Search name, company, email..."
-               class="form-input" style="width:300px;">
-        <button type="submit" class="btn btn-outline btn-sm">Search</button>
-        {% if search %}
-        <a href="/contacts" class="btn btn-outline btn-sm">Clear</a>
-        {% endif %}
-    </form>
-    <div style="display:flex; gap:10px;">
-        <span style="color:var(--text-muted); font-size:13px; align-self:center;">{{ total }} contacts</span>
-        <a href="/contacts/folder" class="btn btn-outline btn-sm">📂 Import from Folder</a>
+<div class="section-header animate-in">
+    <div class="search-bar">
+        <form action="/contacts" method="get" style="display:flex; gap:8px;">
+            <input type="text" name="q" value="{{ search }}" placeholder="Search name, company, email..."
+                   class="form-input">
+            <button type="submit" class="btn btn-primary btn-sm">Search</button>
+            {% if search %}
+            <a href="/contacts" class="btn btn-outline btn-sm">Clear</a>
+            {% endif %}
+        </form>
+    </div>
+    <div style="display:flex; gap:10px; align-items:center;">
+        <span class="text-muted" style="font-size:12px; font-weight:600; letter-spacing:0.5px;">{{ total }} TOTAL</span>
+        <a href="/contacts/folder" class="btn btn-outline btn-sm">📂 Import Folder</a>
         <button class="btn btn-primary btn-sm" onclick="document.getElementById('import-modal').style.display='flex'">
             Import CSV
         </button>
     </div>
 </div>
 
-<div class="card" style="padding:0;">
+<div class="card animate-in" style="padding:0; animation-delay: 50ms;">
     <div class="table-wrap">
         <table>
             <thead>
@@ -33,23 +35,23 @@
                     <th>Phone</th>
                     <th>Region</th>
                     <th>Source</th>
-                    <th></th>
+                    <th style="width: 50px;"></th>
                 </tr>
             </thead>
             <tbody>
                 {% for c in contacts %}
                 <tr>
                     <td><strong>{{ c.first_name }} {{ c.last_name }}</strong></td>
-                    <td>{{ c.company }}</td>
-                    <td>{{ c.title or '—' }}</td>
-                    <td>{{ c.email or '—' }}</td>
-                    <td>{{ c.phone or '—' }}</td>
-                    <td>{{ c.region or '—' }}</td>
-                    <td><span class="badge badge-muted">{{ c.source or '—' }}</span></td>
+                    <td><span class="text-accent">{{ c.company }}</span></td>
+                    <td style="font-size:12px;">{{ c.title or '—' }}</td>
+                    <td class="text-mono" style="font-size:12px;">{{ c.email or '—' }}</td>
+                    <td class="text-mono" style="font-size:12px;">{{ c.phone or '—' }}</td>
+                    <td><span class="badge badge-muted">{{ c.region or '—' }}</span></td>
+                    <td><span class="badge badge-purple">{{ c.source or '—' }}</span></td>
                     <td>
                         <form action="/contacts/delete/{{ c.id }}" method="post" style="display:inline;"
                               onsubmit="return confirm('Delete this contact?')">
-                            <button class="btn btn-danger btn-sm" style="padding:3px 8px;">✕</button>
+                            <button class="btn btn-outline btn-xs" style="color:var(--red); border-color:rgba(239,68,68,0.2);">✕</button>
                         </form>
                     </td>
                 </tr>
@@ -58,7 +60,7 @@
                 <tr><td colspan="8">
                     <div class="empty-state">
                         <div class="empty-icon">👥</div>
-                        <div class="empty-text">No contacts yet — import a CSV to get started</div>
+                        <div class="empty-text">No contacts found — try a different search or import a list</div>
                     </div>
                 </td></tr>
                 {% endif %}
@@ -68,38 +70,40 @@
 </div>
 
 {% if total > per_page %}
-<div style="display:flex; gap:10px; justify-content:center;">
+<div class="pagination animate-in" style="animation-delay: 100ms;">
     {% if page > 1 %}
-    <a href="/contacts?q={{ search }}&page={{ page-1 }}" class="btn btn-outline btn-sm">← Previous</a>
+    <a href="/contacts?q={{ search }}&page={{ page-1 }}">← Previous</a>
     {% endif %}
-    <span style="align-self:center; color:var(--text-muted); font-size:13px;">
-        Page {{ page }} of {{ ((total - 1) // per_page) + 1 }}
-    </span>
+    
+    <span class="current">Page {{ page }} of {{ ((total - 1) // per_page) + 1 }}</span>
+    
     {% if page * per_page < total %}
-    <a href="/contacts?q={{ search }}&page={{ page+1 }}" class="btn btn-outline btn-sm">Next →</a>
+    <a href="/contacts?q={{ search }}&page={{ page+1 }}">Next →</a>
     {% endif %}
 </div>
 {% endif %}
 
 <!-- Import Modal -->
-<div id="import-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.6);
-     justify-content:center; align-items:center; z-index:100;"
+<div id="import-modal" style="display:none; position:fixed; inset:0; background:rgba(6,8,15,0.85);
+     backdrop-filter: blur(8px); justify-content:center; align-items:center; z-index:100;"
      onclick="if(event.target===this)this.style.display='none'">
-    <div class="card" style="width:440px; margin:0;">
+    <div class="card" style="width:440px; margin:0; border-color:var(--accent); box-shadow:var(--shadow-lg);">
         <div class="card-title">Import Contacts from CSV</div>
         <form action="/contacts/import" method="post" enctype="multipart/form-data">
             <div class="form-group">
                 <label class="form-label">CSV File</label>
                 <input type="file" name="csv_file" accept=".csv" class="form-input" required>
             </div>
-            <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">
-                Expected headers: first_name, last_name, company, title, email, phone, region, source<br>
-                Also accepts: firstname, lastname, account, mobile, number, job_title
-            </p>
+            <div style="background:rgba(99,102,241,0.05); border-radius:var(--radius-sm); padding:12px; margin-bottom:20px;">
+                <p style="font-size:11px; color:var(--text-secondary); line-height:1.6;">
+                    <strong>Expected headers:</strong> first_name, last_name, company, title, email, phone, region, source<br>
+                    <strong>Also accepts:</strong> firstname, lastname, account, mobile, number, job_title
+                </p>
+            </div>
             <div style="display:flex; gap:10px; justify-content:flex-end;">
                 <button type="button" class="btn btn-outline btn-sm"
                         onclick="document.getElementById('import-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary btn-sm">Import</button>
+                <button type="submit" class="btn btn-primary btn-sm">Import Now</button>
             </div>
         </form>
     </div>

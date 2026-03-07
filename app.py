@@ -387,17 +387,35 @@ def stop_tool(tool):
     return redirect(url_for("outreach"))
 
 
-# ─── Replies ─────────────────────────────────────────────────────────────────
+# ─── Messages ───────────────────────────────────────────────────────────────
 
+@app.route("/messages")
 @app.route("/replies")
-def replies():
+def messages():
     channel = request.args.get("channel", "")
     rows = get_outreach_log(
         channel=channel if channel else None,
         direction="inbound",
         limit=100,
     )
-    return render_template("replies.html", replies=rows, channel=channel)
+    
+    # Simple stats for the analytics grid
+    stats = get_outreach_stats()
+    
+    # More specific counts
+    db = get_db()
+    
+    return render_template(
+        "messages.html", 
+        messages_list=rows, 
+        channel=channel,
+        total_messages=stats["total_replies"],
+        interested_count=stats["interested"],
+        stop_count=stats["stop"],
+        meeting_count=db.execute("SELECT COUNT(*) FROM outreach_log WHERE classification IN ('MEETING_REQUEST', 'MEETING')").fetchone()[0],
+        outlook_count=db.execute("SELECT COUNT(*) FROM outreach_log WHERE direction='inbound' AND channel='outlook'").fetchone()[0],
+        zoom_count=db.execute("SELECT COUNT(*) FROM outreach_log WHERE direction='inbound' AND channel='zoom_sms'").fetchone()[0]
+    )
 
 
 # ─── Activity Log ────────────────────────────────────────────────────────────

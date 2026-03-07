@@ -1,45 +1,57 @@
 {% extends "layout.html" %}
-{% block title %}Dashboard — DSE Toolkit{% endblock %}
+{% block title %}Dashboard — Imperium{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
 
 {% block content %}
 <div class="metrics-grid">
-    <div class="metric-card">
+    <div class="metric-card animate-in" style="animation-delay: 0ms;">
         <div class="metric-label">Total Contacts</div>
         <div class="metric-value accent">{{ contacts_count }}</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card animate-in" style="animation-delay: 50ms;">
         <div class="metric-label">Messages Sent</div>
         <div class="metric-value">{{ stats.total_sent }}</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card animate-in" style="animation-delay: 100ms;">
         <div class="metric-label">Replies</div>
         <div class="metric-value green">{{ stats.total_replies }}</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card animate-in" style="animation-delay: 150ms;">
         <div class="metric-label">Interested</div>
         <div class="metric-value green">{{ stats.interested }}</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card animate-in" style="animation-delay: 200ms;">
         <div class="metric-label">Not Interested</div>
         <div class="metric-value red">{{ stats.not_interested }}</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card animate-in" style="animation-delay: 250ms;">
         <div class="metric-label">Unsubscribed</div>
         <div class="metric-value yellow">{{ stats.stop }}</div>
     </div>
 </div>
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-    <div class="card">
+<div class="grid-2">
+    <div class="card animate-in" style="animation-delay: 300ms;">
         <div class="card-title">Outreach by Channel</div>
         {% if stats.by_channel %}
-        <table>
-            <tr><th>Channel</th><th>Sent</th></tr>
-            {% for ch, cnt in stats.by_channel.items() %}
-            <tr><td>{{ ch }}</td><td>{{ cnt }}</td></tr>
-            {% endfor %}
-        </table>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Channel</th>
+                        <th>Sent</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ch, cnt in stats.by_channel.items() %}
+                    <tr>
+                        <td><span class="badge badge-accent">{{ ch }}</span></td>
+                        <td><strong>{{ cnt }}</strong></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
         {% else %}
         <div class="empty-state">
             <div class="empty-text">No outreach logged yet</div>
@@ -47,26 +59,37 @@
         {% endif %}
     </div>
 
-    <div class="card">
+    <div class="card animate-in" style="animation-delay: 350ms;">
         <div class="card-title">Recent Activity</div>
         {% if recent_activity %}
-        <table>
-            <tr><th>Time</th><th>Channel</th><th>Direction</th><th>Contact</th></tr>
-            {% for row in recent_activity %}
-            <tr>
-                <td>{{ row.timestamp[11:16] if row.timestamp|length > 16 else row.timestamp }}</td>
-                <td><span class="badge badge-blue">{{ row.channel }}</span></td>
-                <td>
-                    {% if row.direction == 'inbound' %}
-                    <span class="badge badge-green">↓ IN</span>
-                    {% else %}
-                    <span class="badge badge-muted">↑ OUT</span>
-                    {% endif %}
-                </td>
-                <td>{{ row.contact_name or '—' }}</td>
-            </tr>
-            {% endfor %}
-        </table>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Channel</th>
+                        <th>Direction</th>
+                        <th>Contact</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in recent_activity %}
+                    <tr>
+                        <td class="text-mono">{{ row.timestamp[11:16] if row.timestamp|length > 16 else row.timestamp }}</td>
+                        <td><span class="badge badge-blue">{{ row.channel }}</span></td>
+                        <td>
+                            {% if row.direction == 'inbound' %}
+                            <span class="badge badge-green">↓ IN</span>
+                            {% else %}
+                            <span class="badge badge-muted">↑ OUT</span>
+                            {% endif %}
+                        </td>
+                        <td><strong>{{ row.contact_name or '—' }}</strong></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
         {% else %}
         <div class="empty-state">
             <div class="empty-text">No activity yet — launch a tool to get started</div>
@@ -75,20 +98,31 @@
     </div>
 </div>
 
-<div class="card">
+<div class="card animate-in" style="animation-delay: 400ms;">
     <div class="card-title">Active Campaigns</div>
     {% if campaigns %}
-    <table>
-        <tr><th>Name</th><th>Summit</th><th>Dates</th><th>Status</th></tr>
-        {% for c in campaigns %}
-        <tr>
-            <td><strong>{{ c.name }}</strong></td>
-            <td>{{ c.summit_name or '—' }}</td>
-            <td>{{ c.dates or '—' }}</td>
-            <td><span class="badge badge-green">{{ c.status }}</span></td>
-        </tr>
-        {% endfor %}
-    </table>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Summit</th>
+                    <th>Dates</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in campaigns %}
+                <tr>
+                    <td><strong>{{ c.name }}</strong></td>
+                    <td>{{ c.summit_name or '—' }}</td>
+                    <td><span class="text-mono">{{ c.dates or '—' }}</span></td>
+                    <td><span class="badge badge-green">{{ c.status }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% else %}
     <div class="empty-state">
         <div class="empty-text">No campaigns — create one in the Campaigns tab</div>

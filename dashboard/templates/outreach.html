@@ -1,93 +1,104 @@
 {% extends "layout.html" %}
-{% block title %}Outreach Tools — DSE Toolkit{% endblock %}
-{% block page_title %}Outreach Tools{% endblock %}
+{% block title %}Outreach — Imperium{% endblock %}
+{% block page_title %}Operational Modules{% endblock %}
 
 {% block content %}
-<p style="color:var(--text-secondary); margin-bottom:20px;">
-    Launch tools in separate terminal windows. They run independently and log activity back here.
-</p>
+<div class="card animate-in" style="background:rgba(99,102,241,0.03); border-style:dashed; margin-bottom:28px;">
+    <p style="color:var(--text-secondary); font-size:13.5px; line-height:1.6;">
+        Launch strategic outreach tools in independent background processes. These modules synchronize their data with the Imperium core database in real-time.
+    </p>
+</div>
 
 <div class="tool-grid">
     <!-- CRM Scraper -->
-    <div class="tool-card">
-        <div class="tool-name">🔍 Salesforce Scraper</div>
+    <div class="tool-card animate-in" style="animation-delay: 0ms;">
+        <div class="tool-name">🔮 CRM Data Acquisition</div>
         <div class="tool-desc">
-            Scrape contacts from Salesforce events and campaigns.
-            Runs in the browser with live feed — no terminal needed.
+            Primary intelligence module for scraping high-value contacts from Salesforce Events and Campaigns. Features integrated MFA handling and live session streaming.
         </div>
         <div class="tool-status">
-            <span class="badge badge-blue">● Integrated</span>
+            <span class="badge badge-accent">INTEGRATED</span>
         </div>
         <div class="tool-actions">
-            <a href="/scraper" class="btn btn-success btn-sm">▶ Open Scraper</a>
+            <a href="/scraper" class="btn btn-primary btn-sm" style="width:100%;">Access Mission Control</a>
         </div>
     </div>
 
     <!-- Zoom SMS Bot -->
-    <div class="tool-card">
+    <div class="tool-card animate-in" style="animation-delay: 50ms;">
         <div class="tool-name">📱 Zoom SMS Reader</div>
         <div class="tool-desc">
-            Read and parse Zoom SMS conversations.
-            Scans Zoom database and reads on-screen conversations.
+            Automated signal collection for Zoom SMS. Scans local databases and reads on-screen conversations to identify prospect interest and meeting requests.
         </div>
         <div class="tool-status">
             {% if tool_status.get('zoom_sms') == 'running' %}
-            <span class="badge badge-green">● Running</span>
+            <span class="badge badge-green">RUNNING</span>
             {% else %}
-            <span class="badge badge-muted">● Stopped</span>
+            <span class="badge badge-muted">STOPPED</span>
             {% endif %}
         </div>
         <div class="tool-actions">
-            <form action="/outreach/launch/zoom_sms" method="post" style="display:inline;">
-                <button class="btn btn-success btn-sm">▶ Launch</button>
-            </form>
             {% if tool_status.get('zoom_sms') == 'running' %}
-            <form action="/outreach/stop/zoom_sms" method="post" style="display:inline;">
-                <button class="btn btn-danger btn-sm">■ Stop</button>
+            <form action="/outreach/stop/zoom_sms" method="post" style="width:100%;">
+                <button class="btn btn-danger btn-sm" style="width:100%;">Stop Module</button>
+            </form>
+            {% else %}
+            <form action="/outreach/launch/zoom_sms" method="post" style="width:100%;">
+                <button class="btn btn-success btn-sm" style="width:100%;">Initialize Module</button>
             </form>
             {% endif %}
         </div>
     </div>
 
     <!-- Outlook Reader -->
-    <div class="tool-card">
-        <div class="tool-name">📧 Outlook Reader</div>
+    <div class="tool-card animate-in" style="animation-delay: 100ms;">
+        <div class="tool-name">📧 Outlook Response Parser</div>
         <div class="tool-desc">
-            Read inbox emails, classify replies (Interested, STOP, etc.),
-            extract phone numbers.
+            Classifies inbound email signals into strategic categories (Interested, Meeting, Opt-out). Extracts verified contact numbers from email signatures.
         </div>
         <div class="tool-status">
             {% if tool_status.get('outlook_reader') == 'running' %}
-            <span class="badge badge-green">● Running</span>
+            <span class="badge badge-green">RUNNING</span>
             {% else %}
-            <span class="badge badge-muted">● Stopped</span>
+            <span class="badge badge-muted">STOPPED</span>
             {% endif %}
         </div>
         <div class="tool-actions">
-            <form action="/outreach/launch/outlook_reader" method="post" style="display:inline;">
-                <button class="btn btn-success btn-sm">▶ Launch</button>
+            {% if tool_status.get('outlook_reader') == 'running' %}
+            <form action="/outreach/stop/outlook_reader" method="post" style="width:100%;">
+                <button class="btn btn-danger btn-sm" style="width:100%;">Stop Module</button>
             </form>
+            {% else %}
+            <form action="/outreach/launch/outlook_reader" method="post" style="width:100%;">
+                <button class="btn btn-success btn-sm" style="width:100%;">Initialize Module</button>
+            </form>
+            {% endif %}
         </div>
     </div>
 
     <!-- Outlook Sender -->
-    <div class="tool-card">
-        <div class="tool-name">✉️ Outlook Sender</div>
+    <div class="tool-card animate-in" style="animation-delay: 150ms;">
+        <div class="tool-name">✉️ Outreach Broadcaster</div>
         <div class="tool-desc">
-            Send templated emails and calendar invites through Outlook.
-            Supports review-before-send mode.
+            High-volume communication module for templated emails and calendar orchestration. Supports manual review gates and variable-driven personalization.
         </div>
         <div class="tool-status">
             {% if tool_status.get('outlook_sender') == 'running' %}
-            <span class="badge badge-green">● Running</span>
+            <span class="badge badge-green">RUNNING</span>
             {% else %}
-            <span class="badge badge-muted">● Stopped</span>
+            <span class="badge badge-muted">STOPPED</span>
             {% endif %}
         </div>
         <div class="tool-actions">
-            <form action="/outreach/launch/outlook_sender" method="post" style="display:inline;">
-                <button class="btn btn-success btn-sm">▶ Launch</button>
+            {% if tool_status.get('outlook_sender') == 'running' %}
+            <form action="/outreach/stop/outlook_sender" method="post" style="width:100%;">
+                <button class="btn btn-danger btn-sm" style="width:100%;">Stop Module</button>
             </form>
+            {% else %}
+            <form action="/outreach/launch/outlook_sender" method="post" style="width:100%;">
+                <button class="btn btn-success btn-sm" style="width:100%;">Initialize Module</button>
+            </form>
+            {% endif %}
         </div>
     </div>
 </div>

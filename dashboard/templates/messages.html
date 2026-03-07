@@ -1,0 +1,82 @@
+{% extends "layout.html" %}
+{% block title %}Messages — Imperium{% endblock %}
+{% block page_title %}Messages{% endblock %}
+
+{% block content %}
+<!-- Analytics cards -->
+<div class="analytics-grid">
+    <div class="analytics-card">
+        <div class="a-value text-accent">{{ total_messages }}</div>
+        <div class="a-label">Total Messages</div>
+    </div>
+    <div class="analytics-card">
+        <div class="a-value text-green">{{ interested_count }}</div>
+        <div class="a-label">Interested</div>
+    </div>
+    <div class="analytics-card">
+        <div class="a-value text-yellow">{{ meeting_count }}</div>
+        <div class="a-label">Meetings</div>
+    </div>
+    <div class="analytics-card">
+        <div class="a-value text-red">{{ stop_count }}</div>
+        <div class="a-label">Unsubscribed</div>
+    </div>
+    <div class="analytics-card">
+        <div class="a-value" style="color: var(--blue-light);">{{ outlook_count }}</div>
+        <div class="a-label">Outlook</div>
+    </div>
+    <div class="analytics-card">
+        <div class="a-value" style="color: var(--cyan);">{{ zoom_count }}</div>
+        <div class="a-label">Zoom SMS</div>
+    </div>
+</div>
+
+<!-- Channel tabs -->
+<div class="channel-tabs">
+    <a href="/messages" class="channel-tab {% if not channel %}active{% endif %}">All Messages</a>
+    <a href="/messages?channel=outlook" class="channel-tab {% if channel == 'outlook' %}active{% endif %}">📧 Outlook</a>
+    <a href="/messages?channel=zoom_sms" class="channel-tab {% if channel == 'zoom_sms' %}active{% endif %}">📱 Zoom SMS</a>
+    <a href="/messages?channel=linkedin" class="channel-tab {% if channel == 'linkedin' %}active{% endif %}">💼 LinkedIn</a>
+</div>
+
+<!-- Message cards -->
+{% if messages_list %}
+<div class="messages-feed">
+    {% for r in messages_list %}
+    <div class="msg-card animate-in" style="animation-delay: {{ loop.index0 * 30 }}ms;">
+        <div class="msg-avatar {% if r.channel == 'outlook' %}outlook{% elif r.channel == 'zoom_sms' %}zoom{% else %}linkedin{% endif %}">
+            {% if r.channel == 'outlook' %}📧{% elif r.channel == 'zoom_sms' %}📱{% else %}💼{% endif %}
+        </div>
+        <div class="msg-body">
+            <div class="msg-header">
+                <span class="msg-sender">{{ r.contact_name or r.contact_email or r.contact_phone or 'Unknown Contact' }}</span>
+                {% if r.classification == 'INTERESTED' %}
+                <span class="badge badge-green">Interested</span>
+                {% elif r.classification == 'NOT_INTERESTED' %}
+                <span class="badge badge-red">Not Interested</span>
+                {% elif r.classification == 'STOP' %}
+                <span class="badge badge-red">STOP</span>
+                {% elif r.classification == 'MORE_INFO' %}
+                <span class="badge badge-yellow">More Info</span>
+                {% elif r.classification in ('MEETING_REQUEST', 'MEETING') %}
+                <span class="badge badge-green">Meeting</span>
+                {% else %}
+                <span class="badge badge-muted">{{ r.classification or 'Unclassified' }}</span>
+                {% endif %}
+                <span class="badge badge-blue" style="font-size:10px;">{{ r.channel }}</span>
+                <span class="msg-time">{{ r.timestamp }}</span>
+            </div>
+            <div class="msg-preview">{{ r.content or '(no content)' }}</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-icon">💬</div>
+        <div class="empty-text">No messages yet — run the Outlook Reader or Zoom Reader to scan for replies</div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

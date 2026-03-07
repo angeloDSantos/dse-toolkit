@@ -1,61 +1,63 @@
 {% extends "layout.html" %}
-{% block title %}Activity Log — DSE Toolkit{% endblock %}
-{% block page_title %}Activity Log{% endblock %}
+{% block title %}Activity — Imperium{% endblock %}
+{% block page_title %}Comprehensive Activity Log{% endblock %}
 
 {% block content %}
-<div class="section-header">
-    <div style="display:flex; gap:8px;">
-        <a href="/activity" class="btn btn-sm {% if not channel %}btn-primary{% else %}btn-outline{% endif %}">All</a>
-        <a href="/activity?channel=outlook" class="btn btn-sm {% if channel == 'outlook' %}btn-primary{% else %}btn-outline{% endif %}">📧 Outlook</a>
-        <a href="/activity?channel=zoom_sms" class="btn btn-sm {% if channel == 'zoom_sms' %}btn-primary{% else %}btn-outline{% endif %}">📱 Zoom SMS</a>
-        <a href="/activity?channel=linkedin" class="btn btn-sm {% if channel == 'linkedin' %}btn-primary{% else %}btn-outline{% endif %}">💼 LinkedIn</a>
-        <a href="/activity?channel=scraper" class="btn btn-sm {% if channel == 'scraper' %}btn-primary{% else %}btn-outline{% endif %}">🔍 Scraper</a>
+<div class="section-header animate-in">
+    <div class="channel-tabs">
+        <a href="/activity" class="channel-tab {% if not channel %}active{% endif %}">All Activity</a>
+        <a href="/activity?channel=outlook" class="channel-tab {% if channel == 'outlook' %}active{% endif %}">📧 Outlook</a>
+        <a href="/activity?channel=zoom_sms" class="channel-tab {% if channel == 'zoom_sms' %}active{% endif %}">📱 Zoom SMS</a>
+        <a href="/activity?channel=linkedin" class="channel-tab {% if channel == 'linkedin' %}active{% endif %}">💼 LinkedIn</a>
+        <a href="/activity?channel=scraper" class="channel-tab {% if channel == 'scraper' %}active{% endif %}">🔍 Scraper</a>
     </div>
 </div>
 
-<div class="card" style="padding:0;">
+<div class="card animate-in" style="padding:0; overflow:hidden; animation-delay:100ms;">
     <div class="table-wrap">
         <table>
             <thead>
                 <tr>
-                    <th>Time</th>
-                    <th>Channel</th>
-                    <th>Direction</th>
-                    <th>Contact</th>
-                    <th>Status</th>
-                    <th>Content</th>
+                    <th style="width:140px;">Timestamp</th>
+                    <th style="width:120px;">Platform</th>
+                    <th style="width:100px;">Direction</th>
+                    <th>Identity Context</th>
+                    <th>Execution Status</th>
+                    <th>Content Analytics</th>
                 </tr>
             </thead>
             <tbody>
                 {% for a in activity %}
                 <tr>
-                    <td>{{ a.timestamp }}</td>
-                    <td><span class="badge badge-blue">{{ a.channel }}</span></td>
+                    <td class="text-mono" style="font-size:11px;">{{ a.timestamp }}</td>
+                    <td><span class="badge badge-purple">{{ a.channel|upper }}</span></td>
                     <td>
                         {% if a.direction == 'inbound' %}
-                        <span class="badge badge-green">↓ IN</span>
+                        <span class="badge badge-green">↓ SIGNAL IN</span>
                         {% else %}
-                        <span class="badge badge-muted">↑ OUT</span>
+                        <span class="badge badge-muted">↑ BROADCAST</span>
                         {% endif %}
                     </td>
-                    <td>{{ a.contact_name or a.contact_email or '—' }}</td>
+                    <td><strong>{{ a.contact_name or a.contact_email or '—' }}</strong></td>
                     <td>
                         {% if a.status == 'sent' %}
-                        <span class="badge badge-green">{{ a.status }}</span>
+                        <span class="badge badge-green">COMPLETED</span>
                         {% elif a.status == 'failed' %}
-                        <span class="badge badge-red">{{ a.status }}</span>
+                        <span class="badge badge-red">FAILED</span>
                         {% else %}
-                        <span class="badge badge-muted">{{ a.status }}</span>
+                        <span class="badge badge-muted">{{ a.status|upper }}</span>
                         {% endif %}
                     </td>
-                    <td title="{{ a.content }}">{{ a.content[:60] }}{% if a.content|length > 60 %}...{% endif %}</td>
+                    <td style="font-size:12px; color:var(--text-secondary); line-height:1.4;" title="{{ a.content }}">
+                        {{ a.content[:70] }}{% if a.content|length > 70 %}...{% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
                 {% if not activity %}
                 <tr><td colspan="6">
                     <div class="empty-state">
                         <div class="empty-icon">📋</div>
-                        <div class="empty-text">No activity logged yet</div>
+                        <div class="empty-text">Strategic log is empty — initialize modules to begin tracking activity</div>
                     </div>
                 </td></tr>
                 {% endif %}
