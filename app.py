@@ -94,13 +94,29 @@ def import_contacts():
         return redirect(url_for("contacts"))
 
     content = file.stream.read().decode("utf-8-sig")
+    count = _import_csv_content(content, source=file.filename)
+    flash(f"Imported {count} contacts from {file.filename}", "success")
+    return redirect(url_for("contacts"))
+
+
+# ─── Folder-based import ─────────────────────────────────────────────────
+
+IMPORTS_DIR     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "imports")
+PROCESSED_DIR   = os.path.join(IMPORTS_DIR, "processed")
+
+
+def _normalise_header(h):
+    """Normalise a CSV header: lowercase, underscores, strip."""
+    return h.strip().lower().replace(" ", "_")
+
+
+def _import_csv_content(content, source=""):
+    """Parse CSV text and add contacts to DB. Returns count imported."""
     reader = csv.DictReader(io.StringIO(content))
     if not reader.fieldnames:
-        flash("CSV has no headers", "error")
-        return redirect(url_for("contacts"))
+        return 0
 
-    # Normalise headers
-    reader.fieldnames = [h.strip().lower().replace(" ", "_") for h in reader.fieldnames]
+    reader.fieldnames = [_normalise_header(h) for h in reader.fieldnames]
 
     imported = 0
     for row in reader:
@@ -109,21 +125,147 @@ def import_contacts():
         co = (row.get("company") or row.get("account") or row.get("account_name") or "").strip()
         if not fn:
             continue
+
+        email = (row.get("email") or row.get("secondary_email") or "").strip()
+        phone = (row.get("phone") or row.get("mobile") or row.get("number")
+                 or row.get("ddi_number") or "").strip()
+
+        # Skip if we already have this exact contact (dedup on email or phone)
+        if email or phone:
+            db = get_db()
+            dup = None
+            if email:
+                dup = db.execute(
+                    "SELECT id FROM contacts WHERE email = ? AND email != ''",
+                    (email,)
+                ).fetchone()
+            if not dup and phone:
+                dup = db.execute(
+                    "SELECT id FROM contacts WHERE phone = ? AND phone != ''",
+                    (phone,)
+                ).fetchone()
+            if dup:
+                continue
+
         add_contact(
             first_name=fn, last_name=ln, company=co,
             title=(row.get("title") or row.get("job_title") or "").strip(),
-            email=(row.get("email") or "").strip(),
-            phone=(row.get("phone") or row.get("mobile") or row.get("number") or "").strip(),
+            email=email,
+            phone=phone,
             linkedin_url=(row.get("linkedin_url") or row.get("linkedin") or "").strip(),
-            salesforce_id=(row.get("salesforce_id") or row.get("sf_id") or "").strip(),
+            salesforce_id=(row.get("salesforce_id") or row.get("sf_id")
+                           or row.get("contact_url") or "").strip(),
             industry=(row.get("industry") or "").strip(),
             region=(row.get("region") or "").strip(),
-            source=(row.get("source") or file.filename).strip(),
+            source=(row.get("source") or source).strip(),
         )
         imported += 1
+    return imported
 
-    flash(f"Imported {imported} contacts from {file.filename}", "success")
-    return redirect(url_for("contacts"))
+
+@app.route("/contacts/folder")
+def folder_imports():
+    """List CSV files in data/imports/ ready to import."""
+    os.makedirs(IMPORTS_DIR, exist_ok=True)
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+    files = []
+    for fname in sorted(os.listdir(IMPORTS_DIR)):
+        if fname.lower().endswith(".csv"):
+            fpath = os.path.join(IMPORTS_DIR, fname)
+            size = os.path.getsize(fpath)
+            # Count rows
+            try:
+                with open(fpath, encoding="utf-8-sig") as f:
+                    row_count = max(0, sum(1 for _ in f) - 1)
+            except Exception:
+                row_count = 0
+            # Read headers
+            try:
+                with open(fpath, encoding="utf-8-sig") as f:
+                    reader = csv.reader(f)
+                    headers = next(reader, [])
+            except Exception:
+                headers = []
+
+            files.append({
+                "name": fname,
+                "size_kb": round(size / 1024, 1),
+                "rows": row_count,
+                "headers": headers,
+            })
+
+    # List processed files
+    processed = []
+    for fname in sorted(os.listdir(PROCESSED_DIR)):
+        if fname.lower().endswith(".csv"):
+            processed.append(fname)
+
+    return render_template("folder_import.html",
+                           files=files, processed=processed,
+                           imports_dir=IMPORTS_DIR)
+
+
+@app.route("/contacts/folder/import/<filename>", methods=["POST"])
+def import_from_folder(filename):
+    """Import a specific CSV from the imports folder."""
+    fpath = os.path.join(IMPORTS_DIR, filename)
+    if not os.path.exists(fpath):
+        flash(f"File not found: {filename}", "error")
+        return redirect(url_for("folder_imports"))
+
+    try:
+        with open(fpath, encoding="utf-8-sig") as f:
+            content = f.read()
+        count = _import_csv_content(content, source=filename)
+
+        # Move to processed
+        os.makedirs(PROCESSED_DIR, exist_ok=True)
+        dest = os.path.join(PROCESSED_DIR, filename)
+        # Avoid overwrite — add timestamp if needed
+        if os.path.exists(dest):
+            base, ext = os.path.splitext(filename)
+            dest = os.path.join(PROCESSED_DIR,
+                                f"{base}_{datetime.now().strftime('%H%M%S')}{ext}")
+        os.rename(fpath, dest)
+
+        flash(f"Imported {count} contacts from {filename} (moved to processed/)", "success")
+    except Exception as e:
+        flash(f"Error importing {filename}: {e}", "error")
+
+    return redirect(url_for("folder_imports"))
+
+
+@app.route("/contacts/folder/import-all", methods=["POST"])
+def import_all_from_folder():
+    """Import ALL CSVs from the imports folder."""
+    os.makedirs(IMPORTS_DIR, exist_ok=True)
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+    total = 0
+    file_count = 0
+    for fname in sorted(os.listdir(IMPORTS_DIR)):
+        if not fname.lower().endswith(".csv"):
+            continue
+        fpath = os.path.join(IMPORTS_DIR, fname)
+        try:
+            with open(fpath, encoding="utf-8-sig") as f:
+                content = f.read()
+            count = _import_csv_content(content, source=fname)
+            total += count
+            file_count += 1
+
+            dest = os.path.join(PROCESSED_DIR, fname)
+            if os.path.exists(dest):
+                base, ext = os.path.splitext(fname)
+                dest = os.path.join(PROCESSED_DIR,
+                                    f"{base}_{datetime.now().strftime('%H%M%S')}{ext}")
+            os.rename(fpath, dest)
+        except Exception:
+            continue
+
+    flash(f"Imported {total} contacts from {file_count} file(s)", "success")
+    return redirect(url_for("folder_imports"))
 
 
 @app.route("/contacts/delete/<int:cid>", methods=["POST"])

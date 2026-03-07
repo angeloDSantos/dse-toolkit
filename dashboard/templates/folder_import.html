@@ -1,0 +1,94 @@
+{% extends "layout.html" %}
+{% block title %}Import Contacts — DSE Toolkit{% endblock %}
+{% block page_title %}Import from Folder{% endblock %}
+
+{% block content %}
+<div class="card" style="margin-bottom:20px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+            <div class="card-title" style="margin-bottom:4px;">📂 Import Folder</div>
+            <p style="color:var(--text-muted); font-size:12px; margin:0;">{{ imports_dir }}</p>
+        </div>
+        <div style="display:flex; gap:10px;">
+            <a href="/contacts" class="btn btn-outline btn-sm">← Back to Contacts</a>
+            {% if files %}
+            <form action="/contacts/folder/import-all" method="post" style="display:inline;"
+                  onsubmit="return confirm('Import all {{ files|length }} file(s)?')">
+                <button class="btn btn-primary btn-sm">⚡ Import All</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+    <p style="color:var(--text-secondary); font-size:13px;">
+        Drop your scraped CSV files into <code>data/imports/</code> — they'll appear here ready to import.
+        Imported files are moved to <code>data/imports/processed/</code> automatically.
+    </p>
+</div>
+
+{% if files %}
+<div class="card" style="padding:0;">
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Rows</th>
+                    <th>Size</th>
+                    <th>Detected Columns</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in files %}
+                <tr>
+                    <td><strong>{{ f.name }}</strong></td>
+                    <td>{{ f.rows }}</td>
+                    <td>{{ f.size_kb }} KB</td>
+                    <td>
+                        {% for h in f.headers[:6] %}
+                        <span class="badge badge-blue" style="margin:1px;">{{ h }}</span>
+                        {% endfor %}
+                        {% if f.headers|length > 6 %}
+                        <span class="badge badge-muted">+{{ f.headers|length - 6 }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form action="/contacts/folder/import/{{ f.name }}" method="post" style="display:inline;">
+                            <button class="btn btn-success btn-sm">Import</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-icon">📂</div>
+        <div class="empty-text">No CSV files in the imports folder</div>
+        <p style="color:var(--text-muted); font-size:12px; margin-top:8px;">
+            Drop files into <code>data/imports/</code> and refresh this page
+        </p>
+    </div>
+</div>
+{% endif %}
+
+{% if processed %}
+<div class="card" style="margin-top:20px;">
+    <div class="card-title">Previously Imported ({{ processed|length }})</div>
+    <table>
+        <thead><tr><th>File</th><th>Status</th></tr></thead>
+        <tbody>
+            {% for p in processed %}
+            <tr>
+                <td>{{ p }}</td>
+                <td><span class="badge badge-green">✓ Processed</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}
