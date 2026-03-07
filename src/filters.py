@@ -1,178 +1,197 @@
 """
-src/filters.py — Record filtering: keywords, regions, warnings, ZMTBE.
+src/filters.py — Record filtering, warning detection, sponsor/delegate checks (spec §6-7).
 """
 
 import re
-from config import ZMTBE_TOKEN
+
+# ─── Region expansion (spec §5.3) ──────────────────────────────────────────
+
+REGION_TOKENS = {
+    "europe": ["europe", "eu", "emea", "dach", "nordics"],
+    "uk":     ["uk", "united kingdom", "britain"],
+    "us":     ["us", "usa", "united states", "america"],
+    "north_america": ["us", "usa", "canada", "north america", "na"],
+    "apac":   ["apac", "asia", "pacific", "asia pacific"],
+    "mea":    ["mea", "middle east", "africa"],
+    "digital": ["digital", "live", "virtual", "online"],
+    "all":    [],
+}
+
+# Known location tokens that confirm a record is a real event
+LOCATION_TOKENS = {
+    "europe", "eu", "emea", "dach", "nordics", "uk", "us", "usa",
+    "north america", "na", "apac", "asia", "pacific", "mea",
+    "amsterdam", "london", "new york", "berlin", "paris", "barcelona",
+    "dubai", "singapore", "sydney", "toronto", "chicago", "dallas",
+    "atlanta", "miami", "san francisco", "los angeles", "boston",
+    "seattle", "denver", "phoenix", "houston", "minneapolis",
+    "digital", "live", "virtual", "online", "frankfurt", "munich",
+    "zurich", "geneva", "madrid", "rome", "milan", "lisbon",
+    "stockholm", "oslo", "copenhagen", "helsinki", "dublin",
+    "brussels", "vienna", "prague", "warsaw", "budapest",
+    "noordwijk", "cape town", "johannesburg",
+}
 
 
-# ─── Warning exclusion system ────────────────────────────────────────────────
+def expand_keywords(keywords: list, region: str) -> list:
+    """Expand each keyword with region variants for matching."""
+    tokens = REGION_TOKENS.get(region, [])
+    expanded = []
+    for kw in keywords:
+        kw_lower = kw.lower()
+        expanded.append(kw_lower)
+        for tok in tokens:
+            expanded.append(f"{kw_lower} {tok}")
+            expanded.append(f"{tok} {kw_lower}")
+    return expanded
 
-_CATEGORY_SIGNALS = {
+
+def _has_edition_number(name: str) -> bool:
+    """Check for a 1 or 2 digit edition number in the record name."""
+    return bool(re.search(r'\b\d{1,2}\b', name))
+
+
+def _has_location_token(name: str) -> bool:
+    """Check for a recognisable location or region token."""
+    name_lower = name.lower()
+    return any(tok in name_lower for tok in LOCATION_TOKENS)
+
+
+def record_passes_filter(name: str, expanded_keywords: list, mode: str) -> bool:
+    """Check if a record name passes the keyword and structural filters.
+
+    For ALL SCRAPE mode, everything passes (except ZMTBE, handled separately).
+    For filtered modes (1-3), requires edition number + location + keyword match.
+    """
+    if mode == "all":
+        return True
+
+    name_lower = name.lower()
+
+    # Structural checks
+    if not _has_edition_number(name):
+        print(f"  FILTER SKIP: '{name}' — no edition number found")
+        return False
+
+    if not _has_location_token(name):
+        print(f"  FILTER SKIP: '{name}' — no location token found")
+        return False
+
+    # Keyword match — OR logic, substring-based, case-insensitive
+    return any(kw in name_lower for kw in expanded_keywords)
+
+
+def is_zmtbe(name: str) -> bool:
+    """Check if a record name contains 'zmtbe' (spec §12.3)."""
+    from config import ZMTBE_TOKEN
+    return ZMTBE_TOKEN in name.lower()
+
+
+# ─── Warning detection (spec §6.5) ────────────────────────────────────────
+
+# Maps raw text patterns to normalised category keys
+_WARNING_PATTERNS = {
     "dnc": [
-        re.compile(r"\bdnc\b",                re.I),
-        re.compile(r"\bdo\s+not\s+contact\b", re.I),
-        re.compile(r"\bdo\s+not\s+email\b",   re.I),
-    ],
-    "open_opportunity": [
-        re.compile(r"\bopen\s+opp\b",         re.I),
-        re.compile(r"\bopen\s+opportunity\b", re.I),
+        r'\bdnc\b', r'\bdo\s*not\s*contact\b',
     ],
     "do_not_email": [
-        re.compile(r"\bdo\s+not\s+email\b",   re.I),
+        r'\bdo\s*not\s*email\b', r'\bemail\s*opt[\s-]*out\b', r'\bdne\b',
+    ],
+    "do_not_text": [
+        r'\bdo\s*not\s*text\b', r'\bsms\s*opt[\s-]*out\b', r'\bno\s*text\b',
     ],
     "blacklist": [
-        re.compile(r"\bblacklist(ed)?\b",     re.I),
+        r'\bblacklist(?:ed)?\b', r'\bcontact\s+is\s+blacklisted\b',
+        r'\bthis\s+contact\s+is\s+blacklisted\b',
+    ],
+    "open_opportunity": [
+        r'\bopen\s*opp(?:ortunity)?\b',
     ],
     "yellow_card": [
-        re.compile(r"\byellow\s*card\b",      re.I),
+        r'\byellow\s*card\b',
     ],
 }
 
+# Compiled patterns for speed
+_COMPILED_PATTERNS = {}
+for cat, patterns in _WARNING_PATTERNS.items():
+    _COMPILED_PATTERNS[cat] = [re.compile(p, re.IGNORECASE) for p in patterns]
+
+
 _CATEGORY_LABELS = {
-    "dnc":              "DNC  (also catches: Do Not Contact + Do Not Email)",
+    "dnc": "DNC / Do Not Contact",
+    "do_not_email": "Do Not Email",
+    "do_not_text": "Do Not Text",
+    "blacklist": "Blacklist",
     "open_opportunity": "Open Opportunity",
-    "do_not_email":     "Do Not Email only  (narrow — email flag only)",
-    "blacklist":        "Blacklist / Blacklisted",
-    "yellow_card":      "Yellow Card",
-    "__ALL__":          "All Warnings  (skip any contact with any warning at all)",
+    "yellow_card": "Yellow Card",
+    "__ALL__": "All Warnings",
 }
 
 
-def warning_is_excluded(warnings_text: str, excluded: set) -> tuple:
-    if not excluded:
+def detect_warnings(raw_text: str) -> set:
+    """Parse raw warning text into a set of normalised category keys."""
+    detected = set()
+    if not raw_text or not raw_text.strip():
+        return detected
+
+    for cat, compiled in _COMPILED_PATTERNS.items():
+        for pattern in compiled:
+            if pattern.search(raw_text):
+                detected.add(cat)
+                break  # One match per category is enough
+
+    # Special case: "IMPORTANT" near "blacklisted"
+    if "blacklist" not in detected:
+        lower = raw_text.lower()
+        if "important" in lower and "blacklisted" in lower:
+            detected.add("blacklist")
+
+    return detected
+
+
+def warning_is_excluded(detected_warnings: set, exclusion_set: set) -> tuple:
+    """Check if any detected warning matches the active exclusion set.
+
+    Returns (should_skip: bool, reason: str)
+    """
+    if not detected_warnings or not exclusion_set:
         return False, ""
-    w = (warnings_text or "").strip()
-    if not w:
-        return False, ""
-    if "__ALL__" in excluded:
-        return True, "All Warnings"
-    for cat in excluded:
-        for pattern in _CATEGORY_SIGNALS.get(cat, []):
-            if pattern.search(w):
-                return True, _CATEGORY_LABELS.get(cat, cat)
+
+    # __ALL__ overrides everything
+    if "__ALL__" in exclusion_set:
+        reason = f"All Warnings (detected: {', '.join(sorted(detected_warnings))})"
+        return True, reason
+
+    # Check each detected warning against exclusion set
+    for cat in detected_warnings:
+        if cat in exclusion_set:
+            label = _CATEGORY_LABELS.get(cat, cat)
+            return True, label
+
     return False, ""
 
 
-def describe_exclusions(excluded: set) -> str:
-    if not excluded:
-        return "none"
-    if "__ALL__" in excluded:
-        return "ALL WARNINGS"
-    return " | ".join(_CATEGORY_LABELS.get(c, c) for c in sorted(excluded))
+def describe_exclusions(exclusions: set) -> str:
+    """Format exclusion set for display."""
+    if not exclusions:
+        return "(none)"
+    labels = [_CATEGORY_LABELS.get(x, x) for x in sorted(exclusions)]
+    return " | ".join(labels)
 
 
-# ─── ZMTBE filter ────────────────────────────────────────────────────────────
+# ─── Sponsor and delegate checks (spec §7) ───────────────────────────────
 
-def is_zmtbe(name: str) -> bool:
-    return ZMTBE_TOKEN in (name or "").lower()
-
-
-# ─── Location / region tokens ───────────────────────────────────────────────
-
-_LOCATION_TOKENS = {
-    "global", "international", "virtual",
-    "america", "americas", "north america", "na", "latam", "latin america",
-    "canada", "us", "usa", "united states",
-    "europe", "european", "emea", "dach", "benelux", "nordics",
-    "uk", "united kingdom", "great britain",
-    "germany", "german", "france", "french", "netherlands", "dutch",
-    "belgium", "belgian", "spain", "spanish", "italy", "italian",
-    "sweden", "swedish", "norway", "norwegian", "denmark", "danish",
-    "finland", "finnish", "switzerland", "swiss", "austria", "austrian",
-    "portugal", "portuguese", "ireland", "irish", "poland", "polish",
-    "czech", "hungary", "hungarian", "greece", "greek",
-    "apac", "asia", "australia", "australian", "singapore", "japan",
-    "japanese", "india", "indian", "china", "chinese",
-    "mea", "middle east", "africa", "african",
-    "new york", "nyc", "london", "paris", "berlin", "sydney", "dubai",
-    "toronto", "chicago", "dallas", "atlanta", "miami", "boston",
-    "seattle", "san francisco", "las vegas", "denver", "nashville",
-    "austin", "manchester", "edinburgh", "amsterdam", "munich",
-    "digital", "live",
-}
-
-RECORD_REGION_SYNONYMS = {
-    "all":           set(),
-    "europe":        {"europe", "european", "eu", "emea", "dach", "benelux", "nordics"},
-    "uk":            {"uk", "united kingdom", "great britain", "britain",
-                      "london", "manchester", "birmingham", "edinburgh", "glasgow"},
-    "us":            {"us", "usa", "united states", "america", "north america", "na"},
-    "north_america": {"north america", "na", "america", "united states", "usa", "us", "canada"},
-    "apac":          {"apac", "asia", "australia", "singapore", "japan", "india"},
-    "mea":           {"mea", "middle east", "africa"},
-    "digital":       {"digital", "live"},
-}
-
-_NORM = lambda s: re.sub(r"\s+", " ", (s or "").lower().strip())
-_EDITION_RE = re.compile(r"(?<![0-9])\b([1-9][0-9]?)\b(?![0-9])")
-
-
-def name_has_location(name: str) -> str:
-    n = _NORM(name)
-    for token in sorted(_LOCATION_TOKENS, key=len, reverse=True):
-        if token in n:
-            return token
-    return ""
-
-
-def name_has_edition_number(name: str) -> str:
-    m = _EDITION_RE.search(name or "")
-    return m.group(1) if m else ""
-
-
-def _contains_any_token(text: str, tokens: set) -> bool:
-    t = _NORM(text)
-    for tok in sorted(tokens, key=len, reverse=True):
-        if tok and tok in t:
+def is_sponsor(contact_record_type: str, record_type: str) -> bool:
+    """Check if either field contains 'Sponsor' (spec §7.1)."""
+    for field in (contact_record_type, record_type):
+        if field and "sponsor" in field.lower():
             return True
     return False
 
 
-def expand_keyword_targets(base_keywords: list, record_region: str) -> list:
-    targets = []
-    rr = (record_region or "all").lower().strip()
-    region_tokens = RECORD_REGION_SYNONYMS.get(rr, set())
-    for kw in base_keywords:
-        kw_n = _NORM(kw)
-        if not kw_n:
-            continue
-        targets.append(kw_n)
-        for rt in region_tokens:
-            rt_n = _NORM(rt)
-            if rt_n:
-                targets.append(f"{kw_n} {rt_n}")
-                targets.append(f"{rt_n} {kw_n}")
-    out, seen = [], set()
-    for t in targets:
-        if t not in seen:
-            out.append(t)
-            seen.add(t)
-    return out
-
-
-def record_passes_filter(name: str, base_keywords: list, record_region: str) -> tuple:
-    n  = _NORM(name)
-    ed = name_has_edition_number(name)
-    if not ed:
-        return False, "no 1-2 digit edition number found"
-    loc = name_has_location(name)
-    if not loc:
-        return False, "no location/region found in name"
-    rr = (record_region or "all").lower().strip()
-    rr_tokens = RECORD_REGION_SYNONYMS.get(rr, set())
-    if rr != "all" and not _contains_any_token(name, rr_tokens):
-        return False, f"outside record-region ({rr})"
-    base_kws = [k for k in (base_keywords or []) if _NORM(k)]
-    if not base_kws:
-        return False, "no keywords provided"
-    targets = expand_keyword_targets(base_kws, rr)
-    matched_target = next((t for t in targets if t in n), None)
-    if not matched_target:
-        matched_base = next((k for k in base_kws if _NORM(k) in n), None)
-        if matched_base and (rr == "all" or _contains_any_token(name, rr_tokens)):
-            matched_target = f"{_NORM(matched_base)} + region-signal"
-        else:
-            short = ", ".join(targets[:6]) + ("..." if len(targets) > 6 else "")
-            return False, f"no keyword match (targets: {short})"
-    return True, f"match='{matched_target}'  region='{rr}'  location='{loc}'  edition='{ed}'"
+def is_delegate(contact_record_type: str) -> bool:
+    """Check if Contact Record Type is 'Delegate' (spec §7.2)."""
+    if not contact_record_type:
+        return False
+    return contact_record_type.strip().lower() == "delegate"

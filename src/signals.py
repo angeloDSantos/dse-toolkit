@@ -1,132 +1,127 @@
 """
-src/signals.py — File-based signal system for controlling the scraper.
+src/signals.py — Signal system for scraper control (spec §8).
 
-Run ``python signal.py s`` in a second terminal to skip the current
-event, ``p`` to pause/resume, ``q`` to quit, etc.
+Two exceptions propagate through the call stack:
+  SkipEventSignal  — raised on 's', caught in the record loop
+  QuitSignal       — raised on 'q', caught in main / entity wrapper
 """
 
 import os
 import time
-import threading
 
-from config import SIGNAL_FILE
-
-
-# ─── Signal Exceptions ──────────────────────────────────────────────────────
 
 class SkipEventSignal(Exception):
+    """Raised when 's' is received. Propagates up to the record loop."""
     pass
+
 
 class QuitSignal(Exception):
+    """Raised when 'q' is received. Propagates up to main."""
     pass
 
 
-# ─── Read + clear the signal file ───────────────────────────────────────────
-
-def _read_and_clear_signal() -> str:
-    if not os.path.exists(SIGNAL_FILE):
-        return ""
-    try:
-        with open(SIGNAL_FILE, "r") as f:
-            sig = f.read().strip().lower()
-        os.remove(SIGNAL_FILE)
-        return sig
-    except Exception:
-        return ""
-
-
-# ─── Controls ────────────────────────────────────────────────────────────────
-
 class Controls:
-    """
-    Thread-safe controller that polls a signal file for commands.
-    Shared across all workers — one signal affects all.
+    """Signal polling and pause management.
+
+    Usage:
+        ctrl = Controls(signal_file="scraper_signal.txt")
+        # In every loop:
+        ctrl.poll()
+        ctrl.wait_if_paused()
     """
 
-    def __init__(self):
-        self._pause              = threading.Event()
-        self._skip_contact       = threading.Event()
-        self._redo               = threading.Event()
-        self._quit_flag          = False
-        self._keyword_exclusions = []
-        self._lock               = threading.Lock()
+    def __init__(self, signal_file: str = None):
+        if signal_file is None:
+            from config import SIGNAL_FILE
+            signal_file = SIGNAL_FILE
+        self.signal_file = signal_file
+        self.paused = False
+        self.skip_contact = False
+        self.redo = False
 
     def poll(self):
-        sig = _read_and_clear_signal()
+        """Read and delete the signal file, then act on the signal.
+
+        Called inside every loop — scroll steps, page waits, etc.
+        Must be fast: no I/O except the signal file check.
+        """
+        if not os.path.exists(self.signal_file):
+            return
+
+        try:
+            with open(self.signal_file, "r") as f:
+                sig = f.read().strip().lower()
+            os.remove(self.signal_file)
+        except (IOError, OSError):
+            return
+
         if not sig:
             return
+
         if sig == "s":
-            print("\n  [SIGNAL] Skip event/campaign — stopping current record now.\n", flush=True)
+            print("\n  [SIGNAL] Skip event/campaign received")
             raise SkipEventSignal()
+
         elif sig == "q":
-            self._quit_flag = True
-            print("\n  [SIGNAL] Quit received — stopping after this contact.\n", flush=True)
+            print("\n  [SIGNAL] Quit received — finishing current contact then stopping.")
             raise QuitSignal()
-        elif sig == "p":
-            self.toggle_pause()
-            state = "PAUSED  (send p again to resume)" if self._pause.is_set() else "RESUMED"
-            print(f"\n  [SIGNAL] {state}\n", flush=True)
+
         elif sig == "c":
-            self._skip_contact.set()
-            print("\n  [SIGNAL] Skip contact received.\n", flush=True)
+            print("\n  [SIGNAL] Skip current contact")
+            self.skip_contact = True
+
+        elif sig == "p":
+            self.paused = not self.paused
+            state = "PAUSED — send p again to resume" if self.paused else "RESUMED"
+            print(f"\n  [SIGNAL] {state}")
+
         elif sig == "r":
-            self._redo.set()
-            print("\n  [SIGNAL] Redo previous event/campaign received.\n", flush=True)
+            print("\n  [SIGNAL] Redo — will reprocess previous event/campaign")
+            self.redo = True
+
+        elif sig == "status":
+            print("\n  [SIGNAL] Status request received")
+            # Status is handled by the caller reading ctrl.status_requested
+            self.status_requested = True
+
         elif sig.startswith("x:"):
-            kw = sig[2:].strip().lower()
-            with self._lock:
-                if kw and kw not in self._keyword_exclusions:
-                    self._keyword_exclusions.append(kw)
-                    print(f"\n  [SIGNAL] Keyword exclusion added: '{kw}'\n", flush=True)
-        else:
-            print(f"\n  [SIGNAL] Unknown signal '{sig}' — ignored.\n", flush=True)
-
-    # Pause management
-    def is_paused(self) -> bool:
-        return self._pause.is_set()
-
-    def toggle_pause(self):
-        if self._pause.is_set():
-            self._pause.clear()
-        else:
-            self._pause.set()
-
-    def pause(self):
-        self._pause.set()
-
-    def resume(self):
-        self._pause.clear()
+            keyword = sig[2:].strip()
+            if keyword:
+                if not hasattr(self, "runtime_exclusions"):
+                    self.runtime_exclusions = set()
+                self.runtime_exclusions.add(keyword.lower())
+                print(f"\n  [SIGNAL] Excluding records containing '{keyword}'")
 
     def wait_if_paused(self):
-        while self._pause.is_set():
+        """Block while paused, polling for signals every 0.5s."""
+        while self.paused:
             time.sleep(0.5)
-            self.poll()
+            self.poll()  # Listen for p (resume), q (quit), etc.
 
-    # Skip / redo / quit
     def consume_skip_contact(self) -> bool:
-        if self._skip_contact.is_set():
-            self._skip_contact.clear()
+        """Check and reset the skip-contact flag."""
+        if self.skip_contact:
+            self.skip_contact = False
             return True
         return False
 
     def consume_redo(self) -> bool:
-        if self._redo.is_set():
-            self._redo.clear()
+        """Check and reset the redo flag."""
+        if self.redo:
+            self.redo = False
             return True
         return False
 
-    def quit_requested(self) -> bool:
-        return self._quit_flag
+    def consume_status(self) -> bool:
+        """Check and reset the status flag."""
+        if getattr(self, "status_requested", False):
+            self.status_requested = False
+            return True
+        return False
 
-    # Keyword exclusions
-    def name_matches_exclusion(self, name: str) -> str:
-        n = (name or "").lower()
-        with self._lock:
-            for kw in self._keyword_exclusions:
-                if kw in n:
-                    return kw
-        return ""
-
-    def list_exclusions(self) -> list:
-        with self._lock:
-            return list(self._keyword_exclusions)
+    def should_exclude_runtime(self, text: str) -> bool:
+        """Check if text matches any runtime exclusion keyword."""
+        if not hasattr(self, "runtime_exclusions"):
+            return False
+        text_lower = text.lower()
+        return any(kw in text_lower for kw in self.runtime_exclusions)

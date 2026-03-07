@@ -20,6 +20,16 @@ SIGNAL_FILE = "scraper_signal.txt"
 
 
 def send(sig: str):
+    # Check for pending signal
+    if os.path.exists(SIGNAL_FILE):
+        with open(SIGNAL_FILE) as f:
+            pending = f.read().strip()
+        if pending:
+            print(f"  ⚠ Pending signal '{pending}' not yet consumed by scraper.")
+            ans = input("  Overwrite? (y/n): ").strip().lower()
+            if ans not in ("y", "yes"):
+                print("  Cancelled.")
+                return
     with open(SIGNAL_FILE, "w") as f:
         f.write(sig)
     print(f"  Signal sent: {sig!r}")
@@ -30,18 +40,19 @@ def menu():
     print("  " + "=" * 50)
     print("  SCRAPER SIGNAL MENU")
     print("  " + "=" * 50)
-    print("    s  — skip current event/campaign")
-    print("    c  — skip current contact only")
-    print("    p  — pause / resume")
-    print("    r  — redo previous event/campaign")
-    print("    x  — exclude records by keyword")
-    print("    q  — quit cleanly")
+    print("    s      — skip current event/campaign")
+    print("    c      — skip current contact only")
+    print("    p      — pause / resume")
+    print("    r      — redo previous event/campaign")
+    print("    x      — exclude records by keyword")
+    print("    status — show current scrape progress")
+    print("    q      — quit cleanly")
     print("  " + "=" * 50)
     print()
 
     while True:
-        raw = input("  Signal (s/c/p/r/x/q): ").strip().lower()
-        if raw in ("s", "c", "p", "r", "q"):
+        raw = input("  Signal (s/c/p/r/x/status/q): ").strip().lower()
+        if raw in ("s", "c", "p", "r", "q", "status"):
             send(raw)
             break
         elif raw == "x":
@@ -53,7 +64,7 @@ def menu():
             print(f"  Any record containing '{kw}' will be skipped.")
             break
         else:
-            print("  Enter one of: s / c / p / r / x / q")
+            print("  Enter one of: s / c / p / r / x / status / q")
 
 
 if __name__ == "__main__":
@@ -63,13 +74,13 @@ if __name__ == "__main__":
         menu()
     elif len(args) == 1:
         sig = args[0].lower()
-        if sig in ("s", "c", "p", "r", "q"):
+        if sig in ("s", "c", "p", "r", "q", "status"):
             send(sig)
         elif sig == "x":
             print("  Usage: python signal.py x <keyword>")
             sys.exit(1)
         else:
-            print(f"  Unknown signal '{sig}'. Valid: s / c / p / r / x / q")
+            print(f"  Unknown signal '{sig}'. Valid: s / c / p / r / x / status / q")
             sys.exit(1)
     elif len(args) == 2 and args[0].lower() == "x":
         kw = args[1].strip()

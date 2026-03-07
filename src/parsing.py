@@ -1,227 +1,254 @@
 """
-src/parsing.py — Contact page text extraction and field parsing.
+src/parsing.py — Contact page parsing (spec §10).
+
+Two extraction methods:
+  1. Structured label-to-value DOM extraction via JavaScript (primary)
+  2. Line-based fallback
+
+Also handles name extraction (§10.3) and email extraction (§10.4).
 """
 
 import re
-from src.phone import normalise_phone, validate_phone
 
+# ─── JavaScript for structured field extraction (spec §10.2) ──────────────
 
-# ─── Warning patterns ───────────────────────────────────────────────────────
+EXTRACT_FIELDS_JS = """
+function extractFields(root, depth) {
+    if (depth > 14) return {};
+    var result = {};
 
-_WARN_PATTERNS = [
-    re.compile(r"\bopen\s+opp\b",                              re.I),
-    re.compile(r"\bopen\s+opportunity\b",                      re.I),
-    re.compile(r"\bdnc\b",                                     re.I),
-    re.compile(r"\bdo\s+not\s+contact\b",                      re.I),
-    re.compile(r"\bdo\s+not\s+email\b",                        re.I),
-    re.compile(r"\bcontact\s+(has\s+been|is)\s+blacklisted\b", re.I),
-    re.compile(r"\bthis\s+contact\s+is\s+blacklisted\b",       re.I),
-    re.compile(r"\bimportant\b.*\bblacklisted\b",              re.I),
-    re.compile(r"\byellow\s*card\b",                           re.I),
-]
-
-# ─── UI junk lines to skip ──────────────────────────────────────────────────
-
-_UI_JUNK = [
-    "skip to navigation", "skip to main content", "search...",
-    "favorites list", "global actions", "guidance center", "salesforce help",
-    "view profile", "app launcher", "delegates lighting",
-    "show more navigation items", "edit nav items",
-]
-
-_NAME_TITLES  = re.compile(r"^(mr|mrs|ms|miss|dr|prof|sir|madam|mx)\.?\s+", re.I)
-_EMAIL_RE     = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-_FIELD_LABEL_RE = re.compile(
-    r"^(phone|mobile|email|name|title|account|company|address|industry|"
-    r"ddi|direct dial|record type|contact record type|warnings|"
-    r"related|details|activity|news|chatter|"
-    r"delegates lighting|delegates|lightning experience|"
-    r"home|files|dashboards|reports|campaigns|leads|"
-    r"accounts|contacts|opportunities|cases|forecasts|feeds)$",
-    re.I,
-)
-
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _clean_lines(text):
-    return [re.sub(r"\s+", " ", l.strip()) for l in (text or "").splitlines() if l.strip()]
-
-
-def _header(lines):
-    try:
-        return lines[:lines.index("Tabs")]
-    except ValueError:
-        return lines[:160]
-
-
-def _is_junk_line(line):
-    ll = (line or "").strip().lower()
-    return not ll or ll.startswith("skip to") or any(p in ll for p in _UI_JUNK)
-
-
-def _name_like(s):
-    if not s or len(s) < 4 or len(s) > 70:
-        return False
-    parts = s.split()
-    if len(parts) < 2 or len(parts) > 6:
-        return False
-    return all(re.match(r"^[A-Za-z\u00C0-\u024F'\-]+$", p) for p in parts)
-
-
-def _after(lines, *labels):
-    for i, line in enumerate(lines):
-        if (line or "").strip() in labels:
-            for nxt in lines[i + 1:i + 6]:
-                nxt = (nxt or "").strip()
-                if nxt and not _is_junk_line(nxt):
-                    return nxt
-    return ""
-
-
-def _split_name(full):
-    cleaned = _NAME_TITLES.sub("", (full or "").strip()).strip()
-    parts   = cleaned.split()
-    if not parts:
-        return "", ""
-    if len(parts) == 1:
-        return parts[0], ""
-    return parts[0], " ".join(parts[1:])
-
-
-def _all_emails(text: str) -> list:
-    seen, out = set(), []
-    for m in _EMAIL_RE.finditer(text or ""):
-        e = m.group(0).strip().lower()
-        if e not in seen:
-            seen.add(e)
-            out.append(m.group(0).strip())
-    return out
-
-
-# ─── Interruption / ready detection ─────────────────────────────────────────
-
-def looks_like_interruption(text: str) -> bool:
-    t = (text or "").lower()
-    return (
-        "sorry to interrupt" in t
-        or ("css error" in t and "refresh" in t)
-        or t.strip() == "lightning experience"
-    )
-
-
-def contact_page_ready(text: str) -> bool:
-    t = (text or "").lower()
-    if looks_like_interruption(text):
-        return False
-    signals = ("mobile", "phone", "email", "account name", "title", "ddi", "direct dial")
-    return any(s in t for s in signals) and len(t) > 250
-
-
-# ─── Main parser ─────────────────────────────────────────────────────────────
-
-def parse_contact(text: str, region: str) -> dict:
-    """
-    Parse raw page text from a Salesforce Contact page into a structured dict.
-    """
-    lines  = _clean_lines(text)
-    header = _header(lines)
-    name   = ""
-    skip_vals = {
-        "Account Name", "Title", "Phone", "Mobile", "Email", "DDI",
-        "Direct Dial", "Direct Dial In", "Secondary Email", "Personal Email",
+    // dt/dd pattern
+    var dts = root.querySelectorAll('dt');
+    for (var i = 0; i < dts.length; i++) {
+        var label = (dts[i].innerText || dts[i].textContent || '').trim();
+        var dd = dts[i].nextElementSibling;
+        if (dd && dd.tagName === 'DD') {
+            var value = (dd.innerText || dd.textContent || '').trim();
+            if (label && value) result[label.toLowerCase()] = value;
+        }
     }
 
+    // Class-based label/value pairs
+    var labels = root.querySelectorAll('[class*="label"], [class*="Label"]');
+    for (var i = 0; i < labels.length; i++) {
+        var label = (labels[i].innerText || labels[i].textContent || '').trim();
+        var parent = labels[i].parentElement;
+        if (parent) {
+            var valueEl = parent.querySelector('[class*="value"], [class*="Value"]');
+            if (valueEl) {
+                var value = (valueEl.innerText || valueEl.textContent || '').trim();
+                if (label && value) result[label.toLowerCase()] = value;
+            }
+        }
+    }
+
+    // Recurse into shadow roots
+    var all = root.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+        var sr = all[i].shadowRoot;
+        if (sr) {
+            var sub = extractFields(sr, depth + 1);
+            for (var k in sub) if (!result[k]) result[k] = sub[k];
+        }
+    }
+    return result;
+}
+return extractFields(document, 0);
+"""
+
+# ─── Name extraction helpers (spec §10.3) ────────────────────────────────
+
+_TITLE_PREFIXES = re.compile(
+    r'^(?:Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Madam|Mx)\.?\s+', re.IGNORECASE
+)
+
+_FIELD_LABELS = {
+    "phone", "email", "mobile", "title", "account", "name",
+    "fax", "address", "description", "record type", "owner",
+    "created by", "last modified", "contact record type",
+    "edit", "delete", "clone", "save", "cancel",
+}
+
+_EMAIL_RE = re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}')
+
+
+def _clean_name(raw: str) -> tuple:
+    """Clean and split a name string into (first, last).
+
+    Returns ("", "") if the string doesn't look like a name.
+    """
+    if not raw or len(raw) < 4 or len(raw) > 70:
+        return "", ""
+
+    # Skip known UI strings / field labels
+    if raw.lower().strip() in _FIELD_LABELS:
+        return "", ""
+
+    # Strip title prefixes
+    cleaned = _TITLE_PREFIXES.sub('', raw).strip()
+    if not cleaned:
+        return "", ""
+
+    parts = cleaned.split(None, 1)
+    first = parts[0]
+    last = parts[1] if len(parts) > 1 else ""
+
+    return first, last
+
+
+def extract_structured_fields(driver) -> dict:
+    """Run the structured label-to-value DOM extraction.
+
+    Returns a dict of {lowercase_label: value_string}.
+    """
     try:
-        idx = header.index("Name")
-        for c in header[idx + 1:idx + 18]:
-            c = _NAME_TITLES.sub("", (c or "").strip()).strip()
-            if c and not _is_junk_line(c) and c not in skip_vals and _name_like(c):
-                name = c
-                break
-    except ValueError:
-        pass
-    if not name:
-        for c in header[:110]:
-            c = _NAME_TITLES.sub("", (c or "").strip()).strip()
-            if c and not _is_junk_line(c) and _name_like(c):
-                name = c
+        fields = driver.execute_script(EXTRACT_FIELDS_JS)
+        if isinstance(fields, dict) and fields:
+            return fields
+    except Exception as e:
+        print(f"  [PARSER] Structured extraction error: {e}")
+
+    return {}
+
+
+def extract_line_based(driver) -> dict:
+    """Fallback: extract page text and parse field values by label proximity.
+
+    Returns a dict of {lowercase_label: value_string}.
+    """
+    try:
+        text = driver.execute_script(
+            "return document.body ? document.body.innerText : '';"
+        )
+    except Exception:
+        return {}
+
+    if not text:
+        return {}
+
+    lines = [ln.strip() for ln in text.split('\n') if ln.strip()]
+    fields = {}
+
+    target_labels = [
+        "name", "account name", "title", "mobile", "phone",
+        "email", "secondary email", "secondary e-mail", "personal email",
+        "contact record type", "record type", "ddi", "direct dial",
+        "job function vertical", "relevant summits", "industry",
+        "sub industry",
+    ]
+
+    junk = {"edit", "delete", "clone", "save", "cancel", "--", "—", "-"}
+
+    for i, line in enumerate(lines):
+        line_lower = line.lower().rstrip(":")
+        if line_lower in [t for t in target_labels]:
+            # Look at the next non-junk line
+            for j in range(i + 1, min(i + 4, len(lines))):
+                candidate = lines[j].strip()
+                if candidate.lower() in junk or not candidate:
+                    continue
+                if candidate.lower() in [t for t in target_labels]:
+                    break  # Hit another label
+                fields[line_lower] = candidate
                 break
 
-    first, last = _split_name(name)
+    return fields
+
+
+def parse_contact(driver) -> dict:
+    """Parse the current contact page. Returns a normalised contact dict."""
+
+    # Method 1 — Structured extraction
+    fields = extract_structured_fields(driver)
+
+    # Method 2 — Line-based fallback
+    if len(fields) < 3:
+        print("  [PARSER] Structured extraction sparse — using line-based fallback")
+        fallback = extract_line_based(driver)
+        for k, v in fallback.items():
+            if k not in fields:
+                fields[k] = v
+
+    # Extract name
+    raw_name = (fields.get("name") or fields.get("full name") or "").strip()
+    account = (fields.get("account name") or fields.get("account") or "").strip()
+    title_ = (fields.get("title") or fields.get("job title") or "").strip()
+
+    # Ensure name isn't actually the account name or title
+    if raw_name and raw_name.lower() == account.lower():
+        raw_name = ""
+    if raw_name and raw_name.lower() == title_.lower():
+        raw_name = ""
+
+    first_name, last_name = _clean_name(raw_name)
+
+    # Extract emails
+    primary_email = (fields.get("email") or "").strip()
+    secondary_email = (
+        fields.get("secondary email") or
+        fields.get("secondary e-mail") or
+        fields.get("personal email") or ""
+    ).strip()
+
+    # Fallback: regex scan for emails in full page text
+    if not primary_email:
+        try:
+            text = driver.execute_script(
+                "return document.body ? document.body.innerText : '';"
+            )
+            found = _EMAIL_RE.findall(text)
+            if found:
+                primary_email = found[0]
+                if len(found) > 1 and found[1] != primary_email:
+                    secondary_email = secondary_email or found[1]
+        except Exception:
+            pass
+
+    # Extract phone fields (raw — normalisation happens in phone.py)
+    raw_mobile = (
+        fields.get("mobile") or
+        fields.get("mobile phone") or ""
+    ).strip()
+    raw_phone = (
+        fields.get("phone") or
+        fields.get("business phone") or
+        fields.get("work phone") or ""
+    ).strip()
+    raw_ddi = (
+        fields.get("ddi") or
+        fields.get("direct dial") or
+        fields.get("direct dial in") or
+        fields.get("did") or ""
+    ).strip()
+
+    # Extract record type fields (for sponsor/delegate checks)
+    contact_record_type = (fields.get("contact record type") or "").strip()
+    record_type = (fields.get("record type") or "").strip()
 
     # Warnings
-    warns, wseen = [], set()
-    for line in header:
-        if not line or _is_junk_line(line) or len(line) > 220:
-            continue
-        if "blacklisted reason" in line.lower():
-            continue
-        if any(p.search(line) for p in _WARN_PATTERNS) and line not in wseen:
-            wseen.add(line)
-            warns.append(line)
+    warnings_raw = (fields.get("warnings") or fields.get("warning") or "").strip()
 
-    # Emails
-    all_emails      = _all_emails(text)
-    raw_secondary   = _after(lines, "Secondary Email", "Secondary E-mail")
-    email_primary   = all_emails[0] if all_emails else ""
-    email_secondary = ""
-    if raw_secondary and _EMAIL_RE.match(raw_secondary):
-        email_secondary = raw_secondary
-    elif len(all_emails) >= 2:
-        email_secondary = all_emails[1]
-
-    # Phone fields
-    raw_mobile = _after(lines, "Mobile", "Mobile Phone", "Cell", "Cell Phone")
-    raw_phone  = _after(lines, "Phone", "Business Phone", "Work Phone")
-    raw_ddi    = _after(lines, "DDI", "Direct Dial", "Direct Dial In", "DID")
-
-    mob_n, mob_ok, mob_note = "", False, "no Mobile field"
-    if raw_mobile:
-        mob_n, mob_ok, mob_note = validate_phone(raw_mobile, True,  region)
-    ph_n,  ph_ok,  ph_note  = "", False, "no Phone field"
-    if raw_phone:
-        ph_n,  ph_ok,  ph_note  = validate_phone(raw_phone,  False, region)
-
-    if mob_ok:
-        best, best_note = mob_n, f"[Mobile] {mob_note}"
-    elif ph_ok:
-        best, best_note = ph_n,  f"[Phone]  {ph_note}"
-    else:
-        best, best_note = "",    mob_note if raw_mobile else ph_note
-
-    if not best:
-        for raw, fm in ((raw_mobile, True), (raw_phone, False)):
-            n = normalise_phone(raw)
-            if n:
-                best = n
-                best_note = "[raw-normalised fallback]"
-                break
-
-    ddi_n, ddi_ok, ddi_note = "", False, "no DDI field"
-    if raw_ddi:
-        ddi_n, ddi_ok, ddi_note = validate_phone(raw_ddi, False, region, for_ddi=True)
+    # Additional fields
+    job_function = (fields.get("job function vertical") or "").strip()
+    relevant_summits = (fields.get("relevant summits") or "").strip()
+    industry = (fields.get("industry") or "").strip()
+    sub_industry = (fields.get("sub industry") or "").strip()
 
     return {
-        "first_name":           first,
-        "last_name":            last,
-        "account":              _after(lines, "Account Name", "Account", "Company", "Organisation"),
-        "title":                _after(lines, "Title", "Job Title", "Position"),
-        "phone":                best,
-        "phone_note":           best_note,
-        "email":                email_primary,
-        "secondary_email":      email_secondary,
-        "warnings":             " | ".join(warns),
-        "ddi":                  ddi_n if ddi_ok else "",
-        "ddi_ok":               ddi_ok,
-        "ddi_note":             ddi_note,
-        "raw_mobile":           raw_mobile,
-        "raw_phone":            raw_phone,
-        "raw_ddi":              raw_ddi,
-        "contact_record_type":  _after(lines, "Contact Record Type"),
-        "record_type":          _after(lines, "Record Type", "Record type (HS-SF)", "Record type"),
-        "job_function_vertical": _after(lines, "Job Function Vertical", "Job Function", "Function"),
-        "relevant_summits":     _after(lines, "Relevant Summits", "Summits", "Relevant Summit(s)"),
-        "industry":             _after(lines, "Industry"),
-        "sub_industry":         _after(lines, "Sub Industry", "Sub-Industry", "Sub Industry "),
+        "first_name": first_name,
+        "last_name": last_name,
+        "company": account,
+        "title": title_,
+        "email": primary_email,
+        "secondary_email": secondary_email,
+        "mobile": raw_mobile,
+        "phone": raw_phone,
+        "ddi": raw_ddi,
+        "contact_record_type": contact_record_type,
+        "record_type": record_type,
+        "warnings_raw": warnings_raw,
+        "job_function": job_function,
+        "relevant_summits": relevant_summits,
+        "industry": industry,
+        "sub_industry": sub_industry,
     }
