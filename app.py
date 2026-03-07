@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, jsonify, send_from_directory,
+    flash, jsonify, send_from_directory, session,
 )
 
 from core.database import (
@@ -40,9 +40,41 @@ app = Flask(
 )
 app.secret_key = "dse-toolkit-local-key-2024"
 
+LOGIN_PASSWORD = "gds2027"
+
 # Track running background processes
 _processes = {}
 _process_lock = threading.Lock()
+
+
+# ─── Auth ────────────────────────────────────────────────────────────────────
+
+@app.before_request
+def require_login():
+    """Redirect to /login if not authenticated."""
+    allowed = ("/login", "/static")
+    if request.path.startswith(allowed):
+        return
+    if not session.get("authenticated"):
+        return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == LOGIN_PASSWORD:
+            session["authenticated"] = True
+            session.permanent = True
+            return redirect(url_for("dashboard"))
+        return render_template("login.html", error="Access denied — invalid key")
+    return render_template("login.html", error=None)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 # ─── Before first request ───────────────────────────────────────────────────
