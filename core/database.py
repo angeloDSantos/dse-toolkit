@@ -120,6 +120,50 @@ def init_db():
             attachments_json    TEXT DEFAULT '[]',
             created_at          TEXT DEFAULT (datetime('now'))
         );
+
+        -- Scrape sessions (one per scraper run)
+        CREATE TABLE IF NOT EXISTS scrape_sessions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            scrape_name     TEXT NOT NULL,
+            entity_type     TEXT DEFAULT 'events',
+            mode            TEXT DEFAULT 'mobile',
+            keywords        TEXT DEFAULT '[]',
+            record_region   TEXT DEFAULT 'all',
+            phone_region    TEXT DEFAULT 'all',
+            warning_excl    TEXT DEFAULT '[]',
+            list_limit      INTEGER DEFAULT 500,
+            status          TEXT DEFAULT 'running',
+            contacts_saved  INTEGER DEFAULT 0,
+            ddi_saved       INTEGER DEFAULT 0,
+            orders_done     INTEGER DEFAULT 0,
+            sponsors_found  INTEGER DEFAULT 0,
+            non_delegates   INTEGER DEFAULT 0,
+            skipped         INTEGER DEFAULT 0,
+            current_record  TEXT DEFAULT '',
+            started_at      TEXT DEFAULT (datetime('now')),
+            finished_at     TEXT DEFAULT ''
+        );
+
+        -- Scrape events (per-contact live feed entries)
+        CREATE TABLE IF NOT EXISTS scrape_events (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id      INTEGER NOT NULL REFERENCES scrape_sessions(id),
+            event_type      TEXT NOT NULL,
+            first_name      TEXT DEFAULT '',
+            last_name       TEXT DEFAULT '',
+            company         TEXT DEFAULT '',
+            title           TEXT DEFAULT '',
+            email           TEXT DEFAULT '',
+            phone           TEXT DEFAULT '',
+            record_name     TEXT DEFAULT '',
+            order_url       TEXT DEFAULT '',
+            contact_url     TEXT DEFAULT '',
+            reason          TEXT DEFAULT '',
+            warnings        TEXT DEFAULT '',
+            created_at      TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_scrape_events_session
+            ON scrape_events(session_id);
     """)
     db.commit()
 
@@ -148,8 +192,9 @@ def get_contacts(search="", limit=200, offset=0):
         like = f"%{search}%"
         return db.execute(
             "SELECT * FROM contacts WHERE first_name LIKE ? OR last_name LIKE ? "
-            "OR company LIKE ? OR email LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?",
-            (like, like, like, like, limit, offset)
+            "OR company LIKE ? OR title LIKE ? OR email LIKE ? "
+            "ORDER BY id DESC LIMIT ? OFFSET ?",
+            (like, like, like, like, like, limit, offset)
         ).fetchall()
     return db.execute(
         "SELECT * FROM contacts ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -157,8 +202,16 @@ def get_contacts(search="", limit=200, offset=0):
     ).fetchall()
 
 
-def count_contacts():
-    return get_db().execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
+def count_contacts(search=""):
+    db = get_db()
+    if search:
+        like = f"%{search}%"
+        return db.execute(
+            "SELECT COUNT(*) FROM contacts WHERE first_name LIKE ? OR last_name LIKE ? "
+            "OR company LIKE ? OR title LIKE ? OR email LIKE ?",
+            (like, like, like, like, like)
+        ).fetchone()[0]
+    return db.execute("SELECT COUNT(*) FROM contacts").fetchone()[0]
 
 
 def delete_contact(contact_id):
@@ -305,3 +358,83 @@ def delete_summit_config(summit_id):
     db = get_db()
     db.execute("DELETE FROM summit_configs WHERE id = ?", (summit_id,))
     db.commit()
+
+
+# ─── Scrape session helpers ─────────────────────────────────────────────────
+
+def create_scrape_session(scrape_name, entity_type, mode, keywords,
+                          record_region, phone_region, warning_excl, list_limit):
+    db = get_db()
+    import json as _json
+    db.execute(
+        "INSERT INTO scrape_sessions "
+        "(scrape_name, entity_type, mode, keywords, record_region, "
+        " phone_region, warning_excl, list_limit) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (scrape_name, entity_type, mode,
+         _json.dumps(keywords), record_region, phone_region,
+         _json.dumps(list(warning_excl)), list_limit)
+    )
+    db.commit()
+    return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def update_scrape_session(session_id, **kwargs):
+    db = get_db()
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    vals = list(kwargs.values()) + [session_id]
+    db.execute(f"UPDATE scrape_sessions SET {sets} WHERE id = ?", vals)
+    db.commit()
+
+
+def get_scrape_session(session_id):
+    return get_db().execute(
+        "SELECT * FROM scrape_sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+
+
+def get_scrape_sessions():
+    return get_db().execute(
+        "SELECT * FROM scrape_sessions ORDER BY id DESC"
+    ).fetchall()
+
+
+def add_scrape_event(session_id, event_type, **kwargs):
+    db = get_db()
+    fields = ["session_id", "event_type"]
+    values = [session_id, event_type]
+    for k in ("first_name", "last_name", "company", "title", "email",
+              "phone", "record_name", "order_url", "contact_url",
+              "reason", "warnings"):
+        if k in kwargs:
+            fields.append(k)
+            values.append(kwargs[k])
+    placeholders = ", ".join("?" for _ in values)
+    cols = ", ".join(fields)
+    db.execute(f"INSERT INTO scrape_events ({cols}) VALUES ({placeholders})", values)
+    db.commit()
+
+
+def get_scrape_events(session_id, since_id=0, limit=200):
+    return get_db().execute(
+        "SELECT * FROM scrape_events WHERE session_id = ? AND id > ? "
+        "ORDER BY id ASC LIMIT ?",
+        (session_id, since_id, limit)
+    ).fetchall()
+
+
+def search_scrape_events(session_id, query="", event_type="saved"):
+    db = get_db()
+    if query:
+        like = f"%{query}%"
+        return db.execute(
+            "SELECT * FROM scrape_events WHERE session_id = ? AND event_type = ? "
+            "AND (first_name LIKE ? OR last_name LIKE ? OR company LIKE ? OR title LIKE ?) "
+            "ORDER BY id DESC",
+            (session_id, event_type, like, like, like, like)
+        ).fetchall()
+    return db.execute(
+        "SELECT * FROM scrape_events WHERE session_id = ? AND event_type = ? "
+        "ORDER BY id DESC",
+        (session_id, event_type)
+    ).fetchall()

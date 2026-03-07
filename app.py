@@ -29,6 +29,8 @@ from core.database import (
     get_outreach_log, get_outreach_stats, log_outreach,
     get_summit_configs, save_summit_config, get_summit_config,
     get_summit_config_by_id, update_summit_config, delete_summit_config,
+    get_scrape_sessions, get_scrape_session, get_scrape_events,
+    search_scrape_events,
 )
 
 app = Flask(
@@ -80,7 +82,7 @@ def contacts():
     per_page = 50
     offset = (page - 1) * per_page
     rows = get_contacts(search=search, limit=per_page, offset=offset)
-    total = count_contacts()
+    total = count_contacts(search=search)
     return render_template("contacts.html",
                            contacts=rows, search=search,
                            page=page, total=total, per_page=per_page)
@@ -445,6 +447,186 @@ def api_tool_status():
         for name, proc in _processes.items():
             status[name] = "running" if proc.poll() is None else "stopped"
     return jsonify(status)
+
+
+# ─── Scraper Routes ─────────────────────────────────────────────────────────
+
+@app.route("/scraper")
+def scraper_page():
+    """Scraper page — setup form, live feed, or completed results."""
+    from src.scraper_runner import is_running, get_active_session_id
+
+    active_id = get_active_session_id()
+
+    # If a scrape is running, show the live feed
+    if active_id and is_running():
+        session = get_scrape_session(active_id)
+        events = get_scrape_events(active_id, since_id=0, limit=500)
+        # Reverse so newest is first
+        events = list(reversed(events))
+        last_id = events[0]["id"] if events else 0
+        return render_template("scraper.html",
+                               session=session,
+                               events=events,
+                               last_event_id=last_id,
+                               sessions=[],
+                               results=[], search="")
+
+    # No active scrape — show setup form + history
+    sessions = get_scrape_sessions()
+    return render_template("scraper.html",
+                           session=None,
+                           events=[],
+                           last_event_id=0,
+                           sessions=sessions,
+                           results=[], search="")
+
+
+@app.route("/scraper/<int:session_id>")
+def scraper_session(session_id):
+    """View a completed scrape session with search."""
+    session = get_scrape_session(session_id)
+    if not session:
+        flash("Session not found", "error")
+        return redirect(url_for("scraper_page"))
+
+    search = request.args.get("q", "")
+
+    # If still running, redirect to main scraper page
+    if session["status"] in ("running", "mfa_required"):
+        return redirect(url_for("scraper_page"))
+
+    # Search or list all saved contacts from this session
+    if search:
+        results = search_scrape_events(session_id, query=search, event_type="saved")
+    else:
+        results = search_scrape_events(session_id, event_type="saved")
+
+    return render_template("scraper.html",
+                           session=session,
+                           events=[],
+                           last_event_id=0,
+                           sessions=[],
+                           results=results,
+                           search=search)
+
+
+@app.route("/scraper/start", methods=["POST"])
+def scraper_start():
+    """Start a new scrape from the web UI."""
+    from src.scraper_runner import start_scrape, is_running
+
+    if is_running():
+        flash("A scrape is already running", "warning")
+        return redirect(url_for("scraper_page"))
+
+    scrape_name = request.form.get("scrape_name", "").strip()
+    if not scrape_name:
+        flash("Scrape name required", "error")
+        return redirect(url_for("scraper_page"))
+
+    # Parse keywords
+    keywords_raw = request.form.get("keywords", "").strip()
+    keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()] if keywords_raw else []
+
+    # Parse warning exclusions
+    exclusions = set()
+    if request.form.get("excl_all"):
+        exclusions.add("__ALL__")
+    else:
+        for key in ("dnc", "do_not_email", "do_not_text", "blacklist",
+                     "open_opportunity", "yellow_card"):
+            if request.form.get(f"excl_{key}"):
+                exclusions.add(key)
+
+    mode = request.form.get("mode", "mobile")
+
+    config = {
+        "scrape_name": scrape_name,
+        "entity_type": request.form.get("entity_type", "events"),
+        "mode": mode,
+        "keywords": keywords,
+        "record_region": request.form.get("record_region", "all"),
+        "phone_region": request.form.get("phone_region", "all"),
+        "warning_exclusions": exclusions,
+        "list_limit": int(request.form.get("list_limit", 500)),
+    }
+
+    try:
+        session_id = start_scrape(config)
+        flash(f"Scrape '{scrape_name}' started (session #{session_id})", "success")
+    except Exception as e:
+        flash(f"Failed to start scrape: {e}", "error")
+
+    return redirect(url_for("scraper_page"))
+
+
+@app.route("/scraper/stop", methods=["POST"])
+def scraper_stop():
+    """Stop the running scrape."""
+    from src.scraper_runner import request_stop, is_running
+
+    if is_running():
+        request_stop()
+        flash("Stop signal sent — scraper will finish current contact then stop", "success")
+    else:
+        flash("No scrape is running", "warning")
+
+    return redirect(url_for("scraper_page"))
+
+
+@app.route("/scraper/mfa", methods=["POST"])
+def scraper_mfa():
+    """Submit MFA code to the running scraper."""
+    from src.scraper_runner import submit_mfa_from_web
+
+    code = request.form.get("mfa_code", "").strip()
+    if not code:
+        flash("MFA code required", "error")
+    else:
+        submit_mfa_from_web(code)
+        flash("MFA code submitted — verifying...", "success")
+
+    return redirect(url_for("scraper_page"))
+
+
+@app.route("/api/scraper/events")
+def api_scraper_events():
+    """Polling endpoint for live feed updates."""
+    session_id = request.args.get("session_id", 0, type=int)
+    since_id = request.args.get("since_id", 0, type=int)
+
+    session = get_scrape_session(session_id)
+    events = get_scrape_events(session_id, since_id=since_id, limit=100)
+
+    return jsonify({
+        "session": {
+            "status": session["status"],
+            "contacts_saved": session["contacts_saved"],
+            "orders_done": session["orders_done"],
+            "skipped": session["skipped"],
+            "sponsors_found": session["sponsors_found"],
+            "non_delegates": session["non_delegates"],
+            "current_record": session["current_record"],
+        } if session else None,
+        "events": [
+            {
+                "id": e["id"],
+                "event_type": e["event_type"],
+                "first_name": e["first_name"],
+                "last_name": e["last_name"],
+                "company": e["company"],
+                "title": e["title"],
+                "email": e["email"],
+                "phone": e["phone"],
+                "record_name": e["record_name"],
+                "reason": e["reason"],
+                "warnings": e["warnings"],
+                "created_at": e["created_at"],
+            }
+            for e in events
+        ],
+    })
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────

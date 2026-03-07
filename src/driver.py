@@ -216,6 +216,75 @@ def prompt_mfa(driver, window_label: str = "Window", timeout: float = 120.0):
         return False
 
 
+def submit_mfa_code(driver, code: str, timeout: float = 15.0) -> bool:
+    """Submit an MFA code to the current MFA page (called from web UI flow).
+
+    Returns True if login completes after code submission.
+    """
+    if _is_logged_in(driver):
+        return True
+
+    if not _is_mfa_page(driver):
+        return False
+
+    try:
+        # Find the MFA input field
+        code_input = None
+        for selector in [
+            (By.ID, "smc"),
+            (By.ID, "emc"),
+            (By.NAME, "otp"),
+            (By.CSS_SELECTOR, "input[type='text']"),
+            (By.CSS_SELECTOR, "input[type='tel']"),
+            (By.CSS_SELECTOR, "input[type='number']"),
+        ]:
+            try:
+                code_input = driver.find_element(*selector)
+                if code_input.is_displayed():
+                    break
+                code_input = None
+            except Exception:
+                continue
+
+        if not code_input:
+            print("  ✗ Could not find MFA input field")
+            return False
+
+        code_input.clear()
+        code_input.send_keys(code)
+
+        # Click verify button
+        for btn_text in ["Verify", "Submit", "Log In", "Continue"]:
+            try:
+                buttons = driver.find_elements(By.XPATH,
+                    f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', "
+                    f"'abcdefghijklmnopqrstuvwxyz'), '{btn_text.lower()}')] | "
+                    f"//input[@type='submit'][contains(translate(@value, "
+                    f"'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+                    f"'{btn_text.lower()}')]")
+                for btn in buttons:
+                    if btn.is_displayed():
+                        btn.click()
+                        time.sleep(3)
+                        break
+            except Exception:
+                continue
+
+        # Wait for login
+        start = time.time()
+        while time.time() - start < timeout:
+            if _is_logged_in(driver):
+                print("  ✓ MFA accepted via web UI")
+                return True
+            time.sleep(1)
+
+        return True
+
+    except Exception as e:
+        print(f"  ✗ MFA submission failed: {e}")
+        return False
+
+
 def login_all_workers(drivers: list, username: str, password: str):
     """Login all worker browser windows with sequential MFA.
 

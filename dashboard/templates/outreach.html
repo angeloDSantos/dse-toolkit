@@ -13,24 +13,13 @@
         <div class="tool-name">🔍 Salesforce Scraper</div>
         <div class="tool-desc">
             Scrape contacts from Salesforce events and campaigns.
-            Supports parallel workers (1-6 Chrome windows).
+            Runs in the browser with live feed — no terminal needed.
         </div>
         <div class="tool-status">
-            {% if tool_status.get('scraper') == 'running' %}
-            <span class="badge badge-green">● Running</span>
-            {% else %}
-            <span class="badge badge-muted">● Stopped</span>
-            {% endif %}
+            <span class="badge badge-blue">● Integrated</span>
         </div>
         <div class="tool-actions">
-            <form action="/outreach/launch/scraper" method="post" style="display:inline;">
-                <button class="btn btn-success btn-sm">▶ Launch</button>
-            </form>
-            {% if tool_status.get('scraper') == 'running' %}
-            <form action="/outreach/stop/scraper" method="post" style="display:inline;">
-                <button class="btn btn-danger btn-sm">■ Stop</button>
-            </form>
-            {% endif %}
+            <a href="/scraper" class="btn btn-success btn-sm">▶ Open Scraper</a>
         </div>
     </div>
 

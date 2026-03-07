@@ -1,0 +1,454 @@
+{% extends "layout.html" %}
+{% block title %}Scraper — DSE Toolkit{% endblock %}
+{% block page_title %}CRM Scraper{% endblock %}
+
+{% block content %}
+
+{# ─── Active scrape: live feed / MFA prompt ─────────────────────────────── #}
+{% if session and session.status in ('running', 'mfa_required') %}
+
+<div class="metrics-grid" style="margin-bottom:16px;">
+    <div class="metric-card">
+        <div class="metric-label">Status</div>
+        <div class="metric-value {% if session.status == 'running' %}green{% elif session.status == 'mfa_required' %}yellow{% endif %}" style="font-size:18px;">
+            {{ session.status|upper }}
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Contacts Saved</div>
+        <div class="metric-value green" id="stat-saved">{{ session.contacts_saved }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Orders Done</div>
+        <div class="metric-value accent" id="stat-orders">{{ session.orders_done }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Skipped</div>
+        <div class="metric-value" id="stat-skipped" style="color:var(--text-muted);">{{ session.skipped }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Current Record</div>
+        <div style="font-size:13px; color:var(--text-secondary); margin-top:8px; word-break:break-word;" id="stat-record">{{ session.current_record or '—' }}</div>
+    </div>
+</div>
+
+{# MFA prompt #}
+{% if session.status == 'mfa_required' %}
+<div class="card" style="border-color:var(--yellow); margin-bottom:16px;">
+    <div class="card-title" style="color:var(--yellow);">🔐 MFA Code Required</div>
+    <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px;">
+        The scraper has logged into Salesforce and is waiting for your MFA verification code.
+        Check your authenticator app and enter the code below.
+    </p>
+    <form action="/scraper/mfa" method="post" style="display:flex; gap:10px; align-items:center;">
+        <input type="text" name="mfa_code" placeholder="Enter 6-digit code" class="form-input"
+               style="width:200px; font-size:18px; letter-spacing:4px; text-align:center;" autofocus required>
+        <button type="submit" class="btn btn-primary">Submit Code</button>
+    </form>
+</div>
+{% endif %}
+
+{# Stop button #}
+<div style="display:flex; gap:10px; margin-bottom:16px;">
+    <form action="/scraper/stop" method="post">
+        <button type="submit" class="btn btn-danger">⏹ Stop Scrape</button>
+    </form>
+    <span style="align-self:center; font-size:13px; color:var(--text-secondary);">
+        {{ session.scrape_name }} — {{ session.mode }} mode — started {{ session.started_at }}
+    </span>
+</div>
+
+{# Live feed #}
+<div class="card" style="padding:0;">
+    <div style="padding:12px 16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+        <div class="card-title" style="margin:0;">Live Feed</div>
+        <span style="font-size:12px; color:var(--text-muted);" id="feed-count">{{ events|length }} events</span>
+    </div>
+    <div id="live-feed" style="max-height:500px; overflow-y:auto; padding:0;">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:90px;">Status</th>
+                    <th>Name</th>
+                    <th>Company</th>
+                    <th>Phone / Email</th>
+                    <th>Record</th>
+                    <th>Reason</th>
+                    <th style="width:60px;">Time</th>
+                </tr>
+            </thead>
+            <tbody id="feed-body">
+                {% for e in events %}
+                <tr class="feed-row feed-{{ e.event_type }}">
+                    <td>
+                        {% if e.event_type == 'saved' %}
+                            <span class="badge badge-green">SAVED</span>
+                        {% elif e.event_type == 'skipped' %}
+                            <span class="badge badge-muted">SKIP</span>
+                        {% elif e.event_type == 'sponsor' %}
+                            <span class="badge badge-yellow">SPONSOR</span>
+                        {% elif e.event_type == 'non_delegate' %}
+                            <span class="badge badge-yellow">NON-DEL</span>
+                        {% elif e.event_type == 'warning_skip' %}
+                            <span class="badge badge-red">WARNING</span>
+                        {% elif e.event_type == 'error' %}
+                            <span class="badge badge-red">ERROR</span>
+                        {% elif e.event_type == 'status' %}
+                            <span class="badge badge-blue">INFO</span>
+                        {% elif e.event_type == 'record_start' %}
+                            <span class="badge badge-blue">RECORD</span>
+                        {% else %}
+                            <span class="badge badge-muted">{{ e.event_type|upper }}</span>
+                        {% endif %}
+                    </td>
+                    <td><strong>{{ e.first_name }} {{ e.last_name }}</strong></td>
+                    <td>{{ e.company or '—' }}</td>
+                    <td>{{ e.phone or e.email or '—' }}</td>
+                    <td style="max-width:150px;">{{ e.record_name or '—' }}</td>
+                    <td style="max-width:200px; font-size:12px; color:var(--text-muted);">{{ e.reason or '—' }}</td>
+                    <td style="font-size:11px; color:var(--text-muted);">{{ e.created_at[-8:] if e.created_at else '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# Auto-refresh script #}
+<script>
+(function() {
+    let lastId = {{ last_event_id }};
+    const sessionId = {{ session.id }};
+
+    function poll() {
+        fetch(`/api/scraper/events?session_id=${sessionId}&since_id=${lastId}`)
+            .then(r => r.json())
+            .then(data => {
+                // Update stats
+                if (data.session) {
+                    document.getElementById('stat-saved').textContent = data.session.contacts_saved;
+                    document.getElementById('stat-orders').textContent = data.session.orders_done;
+                    document.getElementById('stat-skipped').textContent = data.session.skipped;
+                    document.getElementById('stat-record').textContent = data.session.current_record || '—';
+
+                    // If session is no longer running, reload
+                    if (data.session.status !== 'running' && data.session.status !== 'mfa_required') {
+                        window.location.reload();
+                        return;
+                    }
+                }
+
+                // Add new events
+                if (data.events && data.events.length > 0) {
+                    const tbody = document.getElementById('feed-body');
+                    data.events.forEach(e => {
+                        const tr = document.createElement('tr');
+                        tr.className = `feed-row feed-${e.event_type}`;
+
+                        let badge = '';
+                        const badgeMap = {
+                            saved: '<span class="badge badge-green">SAVED</span>',
+                            skipped: '<span class="badge badge-muted">SKIP</span>',
+                            sponsor: '<span class="badge badge-yellow">SPONSOR</span>',
+                            non_delegate: '<span class="badge badge-yellow">NON-DEL</span>',
+                            warning_skip: '<span class="badge badge-red">WARNING</span>',
+                            error: '<span class="badge badge-red">ERROR</span>',
+                            status: '<span class="badge badge-blue">INFO</span>',
+                            record_start: '<span class="badge badge-blue">RECORD</span>',
+                        };
+                        badge = badgeMap[e.event_type] || `<span class="badge badge-muted">${e.event_type.toUpperCase()}</span>`;
+
+                        const time = e.created_at ? e.created_at.slice(-8) : '—';
+                        tr.innerHTML = `
+                            <td>${badge}</td>
+                            <td><strong>${e.first_name || ''} ${e.last_name || ''}</strong></td>
+                            <td>${e.company || '—'}</td>
+                            <td>${e.phone || e.email || '—'}</td>
+                            <td style="max-width:150px;">${e.record_name || '—'}</td>
+                            <td style="max-width:200px; font-size:12px; color:var(--text-muted);">${e.reason || '—'}</td>
+                            <td style="font-size:11px; color:var(--text-muted);">${time}</td>
+                        `;
+                        tbody.insertBefore(tr, tbody.firstChild);
+                        lastId = Math.max(lastId, e.id);
+                    });
+                    document.getElementById('feed-count').textContent = `${tbody.children.length} events`;
+                }
+            })
+            .catch(() => {});
+    }
+
+    setInterval(poll, 2000);
+})();
+</script>
+
+
+{# ─── Completed/stopped scrape: search results ─────────────────────────── #}
+{% elif session and session.status in ('completed', 'stopped', 'error') %}
+
+<div class="metrics-grid" style="margin-bottom:16px;">
+    <div class="metric-card">
+        <div class="metric-label">Status</div>
+        <div class="metric-value {% if session.status == 'completed' %}green{% elif session.status == 'error' %}red{% else %}yellow{% endif %}" style="font-size:18px;">
+            {{ session.status|upper }}
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Contacts Saved</div>
+        <div class="metric-value green">{{ session.contacts_saved }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Orders Done</div>
+        <div class="metric-value accent">{{ session.orders_done }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Sponsors</div>
+        <div class="metric-value yellow">{{ session.sponsors_found }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Non-Delegates</div>
+        <div class="metric-value" style="color:var(--text-muted);">{{ session.non_delegates }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Skipped</div>
+        <div class="metric-value" style="color:var(--text-muted);">{{ session.skipped }}</div>
+    </div>
+</div>
+
+<div class="section-header">
+    <form action="/scraper/{{ session.id }}" method="get" style="display:flex; gap:10px; align-items:center;">
+        <input type="text" name="q" value="{{ search }}" placeholder="Search name, company, title..."
+               class="form-input" style="width:300px;">
+        <button type="submit" class="btn btn-outline btn-sm">Search</button>
+        {% if search %}
+        <a href="/scraper/{{ session.id }}" class="btn btn-outline btn-sm">Clear</a>
+        {% endif %}
+    </form>
+    <div style="display:flex; gap:10px; align-items:center;">
+        <span style="color:var(--text-muted); font-size:13px;">{{ results|length }} results</span>
+        <a href="/scraper" class="btn btn-primary btn-sm">+ New Scrape</a>
+    </div>
+</div>
+
+<div class="card" style="padding:0;">
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Name</th>
+                    <th>Company</th>
+                    <th>Title</th>
+                    <th>Phone</th>
+                    <th>Email</th>
+                    <th>Record</th>
+                    <th>Warnings</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in results %}
+                <tr>
+                    <td>
+                        {% if e.event_type == 'saved' %}
+                            <span class="badge badge-green">SAVED</span>
+                        {% else %}
+                            <span class="badge badge-muted">{{ e.event_type|upper }}</span>
+                        {% endif %}
+                    </td>
+                    <td><strong>{{ e.first_name }} {{ e.last_name }}</strong></td>
+                    <td>{{ e.company or '—' }}</td>
+                    <td>{{ e.title or '—' }}</td>
+                    <td>{{ e.phone or '—' }}</td>
+                    <td>{{ e.email or '—' }}</td>
+                    <td style="max-width:150px;">{{ e.record_name or '—' }}</td>
+                    <td style="font-size:12px; color:var(--text-muted);">{{ e.warnings or '—' }}</td>
+                </tr>
+                {% endfor %}
+                {% if not results %}
+                <tr><td colspan="8">
+                    <div class="empty-state">
+                        <div class="empty-icon">🔍</div>
+                        <div class="empty-text">No contacts match your search</div>
+                    </div>
+                </td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+
+{# ─── No active scrape: setup form + history ────────────────────────────── #}
+{% else %}
+
+{# Past sessions #}
+{% if sessions %}
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-title">Recent Scrapes</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>Mode</th>
+                    <th>Contacts</th>
+                    <th>Started</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in sessions %}
+                <tr>
+                    <td><strong>{{ s.scrape_name }}</strong></td>
+                    <td>
+                        {% if s.status == 'completed' %}
+                            <span class="badge badge-green">DONE</span>
+                        {% elif s.status == 'running' %}
+                            <span class="badge badge-blue">RUNNING</span>
+                        {% elif s.status == 'stopped' %}
+                            <span class="badge badge-yellow">STOPPED</span>
+                        {% elif s.status == 'error' %}
+                            <span class="badge badge-red">ERROR</span>
+                        {% else %}
+                            <span class="badge badge-muted">{{ s.status|upper }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ s.mode }}</td>
+                    <td>{{ s.contacts_saved }}</td>
+                    <td style="font-size:12px; color:var(--text-muted);">{{ s.started_at }}</td>
+                    <td><a href="/scraper/{{ s.id }}" class="btn btn-outline btn-sm">View</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{# New scrape setup form #}
+<div class="card">
+    <div class="card-title">🚀 Start New Scrape</div>
+    <form action="/scraper/start" method="post">
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Scrape Name</label>
+                <input type="text" name="scrape_name" class="form-input" placeholder="e.g. Amsterdam_CIO_April" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Entity Type</label>
+                <select name="entity_type" class="form-select">
+                    <option value="events">Events only</option>
+                    <option value="campaigns">Campaigns only</option>
+                    <option value="both">Both — Events first, then Campaigns</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Collection Mode</label>
+                <select name="mode" class="form-select" id="mode-select">
+                    <option value="mobile">Mobile only — name, company, phone</option>
+                    <option value="email">Email only — name, company, email</option>
+                    <option value="full">Full — name, company, phone, email, title</option>
+                    <option value="all">ALL SCRAPE — all fields, no keyword filter</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Record Region</label>
+                <select name="record_region" class="form-select">
+                    <option value="europe">Europe (EU / EMEA / DACH / Nordics)</option>
+                    <option value="uk">UK</option>
+                    <option value="us">US</option>
+                    <option value="north_america">North America (US + Canada)</option>
+                    <option value="apac">APAC</option>
+                    <option value="mea">MEA</option>
+                    <option value="digital">Digital / Live</option>
+                    <option value="all" selected>All regions</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group" id="phone-region-group">
+                <label class="form-label">Phone Region</label>
+                <select name="phone_region" class="form-select">
+                    <option value="uk">UK only</option>
+                    <option value="us">US only</option>
+                    <option value="europe">Europe only</option>
+                    <option value="all" selected>All regions</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">List Limit</label>
+                <input type="number" name="list_limit" class="form-input" value="500" min="0" placeholder="0 = no limit">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Keywords (comma-separated, leave blank for ALL SCRAPE)</label>
+            <input type="text" name="keywords" class="form-input" placeholder="CMO, CIO, Marketing, AI Innovation">
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Warning Exclusions</label>
+            <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:6px;">
+                <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary);">
+                    <input type="checkbox" name="excl_dnc" value="1"> DNC
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary);">
+                    <input type="checkbox" name="excl_do_not_email" value="1"> Do Not Email
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary);">
+                    <input type="checkbox" name="excl_do_not_text" value="1"> Do Not Text
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary);">
+                    <input type="checkbox" name="excl_blacklist" value="1"> Blacklist
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary);">
+                    <input type="checkbox" name="excl_open_opportunity" value="1"> Open Opportunity
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary);">
+                    <input type="checkbox" name="excl_yellow_card" value="1"> Yellow Card
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary);">
+                    <input type="checkbox" name="excl_all" value="1"> <strong>All Warnings</strong>
+                </label>
+            </div>
+        </div>
+
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+            <button type="submit" class="btn btn-primary" style="padding:10px 28px; font-size:14px;">
+                🚀 Start Scraping
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+    document.getElementById('mode-select').addEventListener('change', function() {
+        const phoneGroup = document.getElementById('phone-region-group');
+        phoneGroup.style.display = (this.value === 'mobile' || this.value === 'full') ? '' : 'none';
+    });
+</script>
+
+{% endif %}
+
+<style>
+    .feed-saved td { background: rgba(46,213,115,.04); }
+    .feed-sponsor td { background: rgba(255,165,2,.04); }
+    .feed-warning_skip td { background: rgba(255,71,87,.04); }
+    .feed-error td { background: rgba(255,71,87,.06); }
+    .feed-record_start td { border-top: 2px solid var(--border); }
+
+    #live-feed table { margin: 0; }
+    #live-feed td, #live-feed th { padding: 7px 10px; font-size: 12px; }
+
+    input[type="checkbox"] {
+        accent-color: var(--accent);
+        width: 15px;
+        height: 15px;
+    }
+</style>
+
+{% endblock %}
