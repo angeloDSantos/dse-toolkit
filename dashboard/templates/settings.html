@@ -1,0 +1,131 @@
+{% extends "layout.html" %}
+{% block title %}Settings — DSE Toolkit{% endblock %}
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title">
+        {% if editing %}✏️ Edit Summit: {{ editing.name }}{% else %}+ New Summit Configuration{% endif %}
+    </div>
+    <p style="color:var(--text-secondary); font-size:13px; margin-bottom:16px;">
+        Define summit details used for email templates, calendar invites, and campaign setup.
+    </p>
+    <form action="/settings/summit" method="post">
+        {% if editing %}
+        <input type="hidden" name="edit_id" value="{{ editing.id }}">
+        {% endif %}
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Summit Name</label>
+                <input type="text" name="name" class="form-input" required
+                       value="{{ editing.name if editing else '' }}"
+                       placeholder="e.g. CMO Summit Europe 2026">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Venue</label>
+                <input type="text" name="venue" class="form-input"
+                       value="{{ editing.venue if editing else '' }}"
+                       placeholder="e.g. The Ritz-Carlton">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">City</label>
+                <input type="text" name="city" class="form-input"
+                       value="{{ editing.city if editing else '' }}"
+                       placeholder="e.g. Barcelona">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Dates</label>
+                <input type="text" name="dates" class="form-input"
+                       value="{{ editing.dates if editing else '' }}"
+                       placeholder="e.g. 15-17 May 2026">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Target Audience</label>
+                <input type="text" name="audience" class="form-input"
+                       value="{{ editing.audience if editing else '' }}"
+                       placeholder="e.g. VP/Director Marketing, EMEA">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Zoom Link</label>
+                <input type="text" name="zoom_link" class="form-input"
+                       value="{{ editing.zoom_link if editing else 'https://gdssummits.zoom.us/j/2376325263' }}">
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Mission Tracks</label>
+            <textarea name="tracks" class="form-textarea"
+                      placeholder="e.g. Digital Transformation, Brand Strategy, Data-Driven Marketing">{{ editing.tracks if editing else '' }}</textarea>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Namedrop Companies</label>
+            <textarea name="namedrop_companies" class="form-textarea"
+                      placeholder="e.g. JP Morgan Chase, La Galaxy, Microsoft, Coca-Cola">{{ editing.namedrop_companies if editing else '' }}</textarea>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Flight Contribution</label>
+                <input type="text" name="flight_contribution" class="form-input"
+                       value="{{ editing.flight_contribution if editing else '' }}"
+                       placeholder="e.g. Fully covered">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Hotel Nights</label>
+                <input type="text" name="hotel_nights" class="form-input"
+                       value="{{ editing.hotel_nights if editing else '' }}"
+                       placeholder="e.g. 2 nights">
+            </div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:10px;">
+            {% if editing %}
+            <a href="/settings" class="btn btn-outline">Cancel Edit</a>
+            <button type="submit" class="btn btn-primary">Update Summit</button>
+            {% else %}
+            <button type="submit" class="btn btn-primary">Save Summit Config</button>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+{% if summits %}
+<div class="card">
+    <div class="card-title">Saved Summits ({{ summits|length }})</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>City</th>
+                    <th>Dates</th>
+                    <th>Audience</th>
+                    <th>Tracks</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in summits %}
+                <tr>
+                    <td><strong>{{ s.name }}</strong></td>
+                    <td>{{ s.city or '—' }}</td>
+                    <td>{{ s.dates or '—' }}</td>
+                    <td>{{ s.audience or '—' }}</td>
+                    <td>{{ (s.tracks or '—')[:40] }}{% if s.tracks and s.tracks|length > 40 %}...{% endif %}</td>
+                    <td style="white-space:nowrap;">
+                        <a href="/settings?edit={{ s.id }}" class="btn btn-outline btn-sm">✏️ Edit</a>
+                        <form action="/settings/summit/delete/{{ s.id }}" method="post"
+                              style="display:inline;"
+                              onsubmit="return confirm('Delete summit \'{{ s.name }}\'?')">
+                            <button class="btn btn-danger btn-sm">🗑️ Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

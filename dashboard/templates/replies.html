@@ -1,0 +1,63 @@
+{% extends "layout.html" %}
+{% block title %}Replies — DSE Toolkit{% endblock %}
+{% block page_title %}Replies{% endblock %}
+
+{% block content %}
+<div class="section-header">
+    <div style="display:flex; gap:8px;">
+        <a href="/replies" class="btn btn-sm {% if not channel %}btn-primary{% else %}btn-outline{% endif %}">All</a>
+        <a href="/replies?channel=outlook" class="btn btn-sm {% if channel == 'outlook' %}btn-primary{% else %}btn-outline{% endif %}">📧 Outlook</a>
+        <a href="/replies?channel=zoom_sms" class="btn btn-sm {% if channel == 'zoom_sms' %}btn-primary{% else %}btn-outline{% endif %}">📱 Zoom SMS</a>
+        <a href="/replies?channel=linkedin" class="btn btn-sm {% if channel == 'linkedin' %}btn-primary{% else %}btn-outline{% endif %}">💼 LinkedIn</a>
+    </div>
+</div>
+
+<div class="card" style="padding:0;">
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Channel</th>
+                    <th>Contact</th>
+                    <th>Classification</th>
+                    <th>Message</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in replies %}
+                <tr>
+                    <td>{{ r.timestamp }}</td>
+                    <td><span class="badge badge-blue">{{ r.channel }}</span></td>
+                    <td><strong>{{ r.contact_name or r.contact_email or r.contact_phone or '—' }}</strong></td>
+                    <td>
+                        {% if r.classification == 'INTERESTED' %}
+                        <span class="badge badge-green">Interested</span>
+                        {% elif r.classification == 'NOT_INTERESTED' %}
+                        <span class="badge badge-red">Not Interested</span>
+                        {% elif r.classification == 'STOP' %}
+                        <span class="badge badge-red">STOP</span>
+                        {% elif r.classification == 'MORE_INFO' %}
+                        <span class="badge badge-yellow">More Info</span>
+                        {% elif r.classification == 'MEETING_REQUEST' or r.classification == 'MEETING' %}
+                        <span class="badge badge-green">Meeting</span>
+                        {% else %}
+                        <span class="badge badge-muted">{{ r.classification or 'Unclassified' }}</span>
+                        {% endif %}
+                    </td>
+                    <td title="{{ r.content }}">{{ r.content[:80] }}{% if r.content|length > 80 %}...{% endif %}</td>
+                </tr>
+                {% endfor %}
+                {% if not replies %}
+                <tr><td colspan="5">
+                    <div class="empty-state">
+                        <div class="empty-icon">💬</div>
+                        <div class="empty-text">No replies detected yet — run the Outlook Reader or Zoom Reader to scan for replies</div>
+                    </div>
+                </td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

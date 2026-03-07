@@ -1,0 +1,19 @@
+Subject: Quick Info — {summit_name}
+---
+Hi {first_name},
+
+Of course — happy to share more details.
+
+{summit_name} is an expenses-paid summit designed for senior {role_type} leaders. Here's what makes it different:
+
+• FORMAT: No panels or keynotes. Everything is peer-to-peer — roundtable workshops, focus groups, and direct 1:1 meetings.
+• WHO: {attendee_examples}
+• WHEN: {date}
+• WHERE: {location}
+• COST: We cover flights, hotel, and meals for qualified delegates.
+
+Would it be helpful to jump on a quick call to see if this is a fit? I can send over a calendar invite for a time that works.
+
+Best,
+{sender_name}
+GDS Group

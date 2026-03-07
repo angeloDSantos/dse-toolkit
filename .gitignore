@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# Data (don't push user data)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+zoom_sms/data/*.db
+*.csv
+
+# Chrome profiles
+chrome_profile/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Coords (machine-specific calibration)
+coords.json

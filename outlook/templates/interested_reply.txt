@@ -1,0 +1,20 @@
+Subject: Re: More Details — {summit_name}
+---
+Hi {first_name},
+
+Great to hear from you!
+
+Here are some details about {summit_name}:
+
+• Expenses-paid, exclusive peer-to-peer summit
+• No panels — just intimate workshops and 1:1 meetings with senior leaders
+• {date} | {location}
+• We cover flights, hotel, and meals
+
+I've attached a calendar invite for a quick 15-minute call to walk you through the agenda and confirm your spot.
+
+Looking forward to connecting!
+
+Best,
+{sender_name}
+GDS Group

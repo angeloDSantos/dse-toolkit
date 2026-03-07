@@ -1,0 +1,105 @@
+{% extends "layout.html" %}
+{% block title %}Outreach Tools — DSE Toolkit{% endblock %}
+{% block page_title %}Outreach Tools{% endblock %}
+
+{% block content %}
+<p style="color:var(--text-secondary); margin-bottom:20px;">
+    Launch tools in separate terminal windows. They run independently and log activity back here.
+</p>
+
+<div class="tool-grid">
+    <!-- CRM Scraper -->
+    <div class="tool-card">
+        <div class="tool-name">🔍 Salesforce Scraper</div>
+        <div class="tool-desc">
+            Scrape contacts from Salesforce events and campaigns.
+            Supports parallel workers (1-6 Chrome windows).
+        </div>
+        <div class="tool-status">
+            {% if tool_status.get('scraper') == 'running' %}
+            <span class="badge badge-green">● Running</span>
+            {% else %}
+            <span class="badge badge-muted">● Stopped</span>
+            {% endif %}
+        </div>
+        <div class="tool-actions">
+            <form action="/outreach/launch/scraper" method="post" style="display:inline;">
+                <button class="btn btn-success btn-sm">▶ Launch</button>
+            </form>
+            {% if tool_status.get('scraper') == 'running' %}
+            <form action="/outreach/stop/scraper" method="post" style="display:inline;">
+                <button class="btn btn-danger btn-sm">■ Stop</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Zoom SMS Bot -->
+    <div class="tool-card">
+        <div class="tool-name">📱 Zoom SMS Reader</div>
+        <div class="tool-desc">
+            Read and parse Zoom SMS conversations.
+            Scans Zoom database and reads on-screen conversations.
+        </div>
+        <div class="tool-status">
+            {% if tool_status.get('zoom_sms') == 'running' %}
+            <span class="badge badge-green">● Running</span>
+            {% else %}
+            <span class="badge badge-muted">● Stopped</span>
+            {% endif %}
+        </div>
+        <div class="tool-actions">
+            <form action="/outreach/launch/zoom_sms" method="post" style="display:inline;">
+                <button class="btn btn-success btn-sm">▶ Launch</button>
+            </form>
+            {% if tool_status.get('zoom_sms') == 'running' %}
+            <form action="/outreach/stop/zoom_sms" method="post" style="display:inline;">
+                <button class="btn btn-danger btn-sm">■ Stop</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Outlook Reader -->
+    <div class="tool-card">
+        <div class="tool-name">📧 Outlook Reader</div>
+        <div class="tool-desc">
+            Read inbox emails, classify replies (Interested, STOP, etc.),
+            extract phone numbers.
+        </div>
+        <div class="tool-status">
+            {% if tool_status.get('outlook_reader') == 'running' %}
+            <span class="badge badge-green">● Running</span>
+            {% else %}
+            <span class="badge badge-muted">● Stopped</span>
+            {% endif %}
+        </div>
+        <div class="tool-actions">
+            <form action="/outreach/launch/outlook_reader" method="post" style="display:inline;">
+                <button class="btn btn-success btn-sm">▶ Launch</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Outlook Sender -->
+    <div class="tool-card">
+        <div class="tool-name">✉️ Outlook Sender</div>
+        <div class="tool-desc">
+            Send templated emails and calendar invites through Outlook.
+            Supports review-before-send mode.
+        </div>
+        <div class="tool-status">
+            {% if tool_status.get('outlook_sender') == 'running' %}
+            <span class="badge badge-green">● Running</span>
+            {% else %}
+            <span class="badge badge-muted">● Stopped</span>
+            {% endif %}
+        </div>
+        <div class="tool-actions">
+            <form action="/outreach/launch/outlook_sender" method="post" style="display:inline;">
+                <button class="btn btn-success btn-sm">▶ Launch</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+Subject: Following Up — {summit_name}
+---
+Hi {first_name},
+
+Just wanted to follow up on my previous message about {summit_name}.
+
+We still have a handful of spots available for {date} in {location}, and I think your experience at {company} would be a great fit for the discussions.
+
+Would you be open to a quick 10-minute call this week to see if it's right for you?
+
+Best,
+{sender_name}
+GDS Group

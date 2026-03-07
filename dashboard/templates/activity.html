@@ -1,0 +1,66 @@
+{% extends "layout.html" %}
+{% block title %}Activity Log — DSE Toolkit{% endblock %}
+{% block page_title %}Activity Log{% endblock %}
+
+{% block content %}
+<div class="section-header">
+    <div style="display:flex; gap:8px;">
+        <a href="/activity" class="btn btn-sm {% if not channel %}btn-primary{% else %}btn-outline{% endif %}">All</a>
+        <a href="/activity?channel=outlook" class="btn btn-sm {% if channel == 'outlook' %}btn-primary{% else %}btn-outline{% endif %}">📧 Outlook</a>
+        <a href="/activity?channel=zoom_sms" class="btn btn-sm {% if channel == 'zoom_sms' %}btn-primary{% else %}btn-outline{% endif %}">📱 Zoom SMS</a>
+        <a href="/activity?channel=linkedin" class="btn btn-sm {% if channel == 'linkedin' %}btn-primary{% else %}btn-outline{% endif %}">💼 LinkedIn</a>
+        <a href="/activity?channel=scraper" class="btn btn-sm {% if channel == 'scraper' %}btn-primary{% else %}btn-outline{% endif %}">🔍 Scraper</a>
+    </div>
+</div>
+
+<div class="card" style="padding:0;">
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Channel</th>
+                    <th>Direction</th>
+                    <th>Contact</th>
+                    <th>Status</th>
+                    <th>Content</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in activity %}
+                <tr>
+                    <td>{{ a.timestamp }}</td>
+                    <td><span class="badge badge-blue">{{ a.channel }}</span></td>
+                    <td>
+                        {% if a.direction == 'inbound' %}
+                        <span class="badge badge-green">↓ IN</span>
+                        {% else %}
+                        <span class="badge badge-muted">↑ OUT</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ a.contact_name or a.contact_email or '—' }}</td>
+                    <td>
+                        {% if a.status == 'sent' %}
+                        <span class="badge badge-green">{{ a.status }}</span>
+                        {% elif a.status == 'failed' %}
+                        <span class="badge badge-red">{{ a.status }}</span>
+                        {% else %}
+                        <span class="badge badge-muted">{{ a.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td title="{{ a.content }}">{{ a.content[:60] }}{% if a.content|length > 60 %}...{% endif %}</td>
+                </tr>
+                {% endfor %}
+                {% if not activity %}
+                <tr><td colspan="6">
+                    <div class="empty-state">
+                        <div class="empty-icon">📋</div>
+                        <div class="empty-text">No activity logged yet</div>
+                    </div>
+                </td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
