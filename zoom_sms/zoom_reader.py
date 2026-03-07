@@ -1,65 +1,96 @@
 """
-zoom_sms/zoom_reader.py — Read and parse Zoom SMS conversations.
+zoom_sms/zoom_reader.py — Read and store Zoom Phone SMS conversations.
 
-Two approaches:
-  1. Zoom's local SQLite DB (%APPDATA%/Zoom/data/*/zoomdb.db)
-  2. pyautogui screen scraping for live conversation reading
+TWO METHODS (tried in order):
+──────────────────────────────────────────────────────────────────────────────
+1. DIRECT DB SCAN  (fast, silent, no Zoom window needed)
+   Uses the same glob search as db_spider.py — scans every .db file under
+   BOTH %APPDATA%/Roaming/Zoom/** and %APPDATA%/Local/Zoom/**
+   Copies each file to a temp path before reading so Zoom keeps its lock.
 
-The sender's first name is extracted from the FIRST outbound message
-in each conversation (the one YOU sent), since it contains their name
-in the template: "Hey {first_name}, ..."
+2. SCREEN SCRAPE  (supplement / fallback when DB is empty)
+   Brings Zoom to the foreground, clicks every conversation row in the left
+   list pane, then reads the message thread from the right pane using
+   Ctrl+A / Ctrl+C *inside that pane specifically*.
+   Scrolls the list to pick up all conversations.
+
+OUTPUT:
+   Every conversation is written to:
+     • conversations.db      (local archive, same schema as before)
+     • core.database outreach_log  (so app.py Messages/Activity pages see it)
 
 USAGE:
-    from zoom_sms.zoom_reader import ZoomReader
-
-    reader = ZoomReader()
-    convos = reader.read_conversations()
-    for c in convos:
-        print(c["phone"], c["contact_name"], c["last_reply"])
+   CLI interactive:       python zoom_reader.py
+   CLI bulk (from app):   python zoom_reader.py --auto
+   Import:                from zoom_sms.zoom_reader import ZoomReader
 """
 
 import os
 import re
-import csv
+import glob
 import json
 import time
 import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
 
+# ── optional GUI / Win32 libs ─────────────────────────────────────────────────
 try:
     import pyautogui
     import pyperclip
-    HAS_PYAUTOGUI = True
+    HAS_GUI = True
+    pyautogui.FAILSAFE = False   # move mouse to top-left corner to abort
+    pyautogui.PAUSE    = 0.06
 except ImportError:
-    HAS_PYAUTOGUI = False
+    HAS_GUI = False
+
+try:
+    import win32gui
+    import win32con
+    HAS_WIN32 = True
+except ImportError:
+    HAS_WIN32 = False
 
 
-# ─── Config ──────────────────────────────────────────────────────────────────
+# =============================================================================
+# CONFIG
+# =============================================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 CONVO_DB = os.path.join(DATA_DIR, "conversations.db")
-COORDS_FILE = os.path.join(BASE_DIR, "coords.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Screen scrape tuning — adjust if Zoom layout differs on this machine
+CONVO_ROW_HEIGHT  = 64      # approximate px height of one conversation row
+CONVO_LIST_X_PCT  = 0.17    # horizontal centre of left conversation list (0-1 of window)
+CONVO_FIRST_Y_PCT = 0.22    # top of the first conversation row (0-1 of window height)
+MSG_PANE_X_PCT    = 0.72    # horizontal centre of the message pane (0-1 of window)
+MSG_PANE_Y_PCT    = 0.50    # vertical centre of the message pane (0-1 of window)
+CONVO_LOAD_WAIT   = 1.4     # seconds to wait after clicking a conversation row
+MAX_SCREEN_CONVOS = 200     # maximum conversations to screen-scrape in one run
 
-# ─── Conversation database ──────────────────────────────────────────────────
+
+# =============================================================================
+# CONVERSATIONS.DB  (local archive)
+# =============================================================================
 
 def _init_convo_db():
     con = sqlite3.connect(CONVO_DB)
     con.execute("""
         CREATE TABLE IF NOT EXISTS conversations (
-            phone         TEXT PRIMARY KEY,
-            contact_name  TEXT,
-            last_message  TEXT,
-            direction     TEXT,
-            timestamp     TEXT,
+            phone          TEXT PRIMARY KEY,
+            contact_name   TEXT,
+            last_message   TEXT,
+            direction      TEXT,
+            timestamp      TEXT,
             classification TEXT DEFAULT 'UNKNOWN',
-            raw_thread    TEXT
+            raw_thread     TEXT
         )
     """)
     con.execute("""
@@ -76,19 +107,19 @@ def _init_convo_db():
     con.close()
 
 
-def save_conversation(phone, contact_name, messages, classification="UNKNOWN"):
-    """Save a parsed conversation to the local DB."""
+def _save_convo_db(phone, contact_name, messages, classification="UNKNOWN"):
+    """Write a conversation to conversations.db."""
     _init_convo_db()
     con = sqlite3.connect(CONVO_DB)
     try:
         last = messages[-1] if messages else {}
         con.execute("""
             INSERT OR REPLACE INTO conversations
-            (phone, contact_name, last_message, direction, timestamp, classification, raw_thread)
+            (phone, contact_name, last_message, direction, timestamp,
+             classification, raw_thread)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
-            phone,
-            contact_name,
+            phone, contact_name,
             last.get("content", ""),
             last.get("direction", ""),
             last.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
@@ -98,11 +129,10 @@ def save_conversation(phone, contact_name, messages, classification="UNKNOWN"):
         for msg in messages:
             try:
                 con.execute("""
-                    INSERT OR IGNORE INTO messages
-                    (phone, direction, content, timestamp)
+                    INSERT OR IGNORE INTO messages (phone, direction, content, timestamp)
                     VALUES (?, ?, ?, ?)
-                """, (phone, msg.get("direction", ""), msg.get("content", ""),
-                      msg.get("timestamp", "")))
+                """, (phone, msg.get("direction", ""),
+                      msg.get("content", ""), msg.get("timestamp", "")))
             except Exception:
                 pass
         con.commit()
@@ -110,154 +140,232 @@ def save_conversation(phone, contact_name, messages, classification="UNKNOWN"):
         con.close()
 
 
-def load_all_conversations() -> list:
-    """Load all stored conversations."""
+def _load_all_convos() -> list:
     _init_convo_db()
     con = sqlite3.connect(CONVO_DB)
     try:
         rows = con.execute(
             "SELECT phone, contact_name, last_message, direction, "
-            "timestamp, classification FROM conversations "
-            "ORDER BY timestamp DESC"
+            "timestamp, classification FROM conversations ORDER BY timestamp DESC"
         ).fetchall()
         return [
-            {
-                "phone": r[0], "contact_name": r[1],
-                "last_message": r[2], "direction": r[3],
-                "timestamp": r[4], "classification": r[5],
-            }
+            {"phone": r[0], "contact_name": r[1], "last_message": r[2],
+             "direction": r[3], "timestamp": r[4], "classification": r[5]}
             for r in rows
         ]
     finally:
         con.close()
 
 
-# ─── Zoom DB scanning ───────────────────────────────────────────────────────
+# =============================================================================
+# OUTREACH_LOG INTEGRATION
+# Writes to core.database so app.py Messages / Activity pages see results.
+# Silently skips when core.database is not available (standalone use).
+# =============================================================================
 
-def _find_zoom_db_paths() -> list:
-    """Find all Zoom local database files."""
-    candidates = []
-    appdata = os.environ.get("APPDATA", "")
-    zoom_data = os.path.join(appdata, "Zoom", "data")
+def _write_outreach_log(phone, contact_name, messages, classification):
+    try:
+        project_root = os.path.dirname(BASE_DIR)
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
 
-    if os.path.isdir(zoom_data):
-        for entry in os.scandir(zoom_data):
-            if entry.is_dir():
-                db = os.path.join(entry.path, "zoomdb.db")
-                if os.path.isfile(db):
-                    candidates.append(db)
-        direct = os.path.join(zoom_data, "zoomdb.db")
-        if os.path.isfile(direct):
-            candidates.append(direct)
-    return candidates
+        from core.database import get_db, init_db
+        init_db()
+        db = get_db()
+
+        for msg in messages:
+            content   = msg.get("content", "").strip()
+            direction = msg.get("direction", "")
+            ts        = msg.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if not content:
+                continue
+
+            # Skip if already logged (dedup on phone + direction + message text)
+            existing = db.execute(
+                "SELECT id FROM outreach_log WHERE phone=? AND direction=? AND message=?",
+                (phone, direction, content)
+            ).fetchone()
+            if existing:
+                continue
+
+            # Only stamp classification on inbound messages
+            cls = classification if direction == "inbound" else ""
+            db.execute("""
+                INSERT INTO outreach_log
+                (phone, contact_name, channel, direction, message, classification, timestamp)
+                VALUES (?, ?, 'zoom_sms', ?, ?, ?, ?)
+            """, (phone, contact_name or "", direction, content, cls, ts))
+
+        db.commit()
+    except Exception as exc:
+        # Not fatal — local conversations.db is still written
+        print(f"  [outreach_log] Write skipped: {exc}")
 
 
-def _scan_zoom_db(db_path: str) -> list:
+# =============================================================================
+# DATABASE SCANNER
+# Uses the same broad glob as db_spider.py — finds every .db Zoom has written
+# across both Roaming and Local AppData, not just one named zoomdb.db.
+# =============================================================================
+
+def _find_all_zoom_dbs() -> list:
     """
-    Read messages from a Zoom SQLite database.
-    Returns list of {phone, content, direction, timestamp}.
+    Glob both AppData/Roaming/Zoom/** and AppData/Local/Zoom/** for every .db
+    file Zoom has written — mirrors db_spider.py's search pattern exactly.
     """
-    results = []
+    roaming = os.environ.get("APPDATA", "")       # Roaming
+    local   = os.environ.get("LOCALAPPDATA", "")  # Local
+
+    found = []
+    for base in (roaming, local):
+        if not base:
+            continue
+        pattern = os.path.join(base, "Zoom", "**", "*.db")
+        for path in glob.glob(pattern, recursive=True):
+            try:
+                if os.path.getsize(path) > 0:
+                    found.append(path)
+            except OSError:
+                pass
+
+    # Deduplicate across symlinks / alternate paths
+    seen, unique = set(), []
+    for p in found:
+        key = os.path.normcase(os.path.abspath(p))
+        if key not in seen:
+            seen.add(key)
+            unique.append(p)
+    return unique
+
+
+def _has_sms_tables(db_path: str) -> bool:
+    """Quick check — does this .db have any message-like tables?"""
     try:
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()
         shutil.copy2(db_path, tmp.name)
+        con = sqlite3.connect(f"file:{tmp.name}?mode=ro", uri=True)
+        tables_str = " ".join(
+            r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        ).lower()
+        con.close()
+        os.unlink(tmp.name)
+        return any(k in tables_str for k in ("sms", "message", "chat", "im"))
     except Exception:
+        return False
+
+
+def _scan_one_db(db_path: str) -> list:
+    """
+    Extract message rows from a single Zoom .db file using a temp copy.
+    Prints diagnostics rather than silently swallowing errors.
+    Returns list of {phone, content, direction, timestamp}.
+    """
+    results = []
+
+    try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        shutil.copy2(db_path, tmp.name)
+    except Exception as e:
+        print(f"    [db] Cannot copy {db_path}: {e}")
         return results
 
     try:
         con = sqlite3.connect(f"file:{tmp.name}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
 
-        tables = [r[0] for r in con.execute(
+        all_tables = [r[0] for r in con.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()]
 
-        sms_tables = [t for t in tables
-                      if any(k in t.lower()
-                             for k in ("sms", "message", "chat", "im"))]
+        sms_tables = [t for t in all_tables
+                      if any(k in t.lower() for k in ("sms", "message", "chat", "im"))]
+
+        if not sms_tables:
+            con.close()
+            return results
 
         for table in sms_tables:
             try:
-                cols = [r[1] for r in
-                        con.execute(f"PRAGMA table_info({table})").fetchall()]
-                cols_lower = [c.lower() for c in cols]
+                col_rows = con.execute(f"PRAGMA table_info({table})").fetchall()
+                cols     = [r[1] for r in col_rows]
+                cols_low = [c.lower() for c in cols]
 
-                # Find relevant columns
-                number_col = next(
-                    (c for c in cols_lower
-                     if any(k in c for k in
-                            ("number", "phone", "recipient", "peer", "to", "dst"))),
-                    None,
-                )
-                content_col = next(
-                    (c for c in cols_lower
-                     if any(k in c for k in
-                            ("content", "body", "message", "text", "msg"))),
-                    None,
-                )
-                dir_col = next(
-                    (c for c in cols_lower
-                     if any(k in c for k in
-                            ("direction", "type", "send", "outgoing", "is_send"))),
-                    None,
-                )
-                time_col = next(
-                    (c for c in cols_lower
-                     if any(k in c for k in
-                            ("time", "date", "timestamp", "created"))),
-                    None,
-                )
+                def _pick(*keywords):
+                    """Return original-case column name matching first keyword hit."""
+                    for c in cols_low:
+                        if any(k in c for k in keywords):
+                            return cols[cols_low.index(c)]
+                    return None
 
-                if not number_col or not content_col:
+                phone_col = _pick("number", "phone", "recipient",
+                                  "peer", "to_number", "callee", "dst")
+                body_col  = _pick("content", "body", "message",
+                                  "text", "msg", "payload")
+                dir_col   = _pick("direction", "is_outgoing", "is_send",
+                                  "outgoing", "send_type", "msg_type")
+                time_col  = _pick("timestamp", "time", "created_at",
+                                  "date", "sent_at", "received_at")
+
+                if not phone_col or not body_col:
+                    print(f"    [db] {table}: no phone/body columns — skipping")
                     continue
 
-                actual_cols = {
-                    "number": cols[cols_lower.index(number_col)],
-                    "content": cols[cols_lower.index(content_col)],
-                }
+                # Build positional SELECT so index lookups are safe
+                sel = [phone_col, body_col]
+                pos = {"phone": 0, "body": 1}
                 if dir_col:
-                    actual_cols["direction"] = cols[cols_lower.index(dir_col)]
+                    pos["dir"] = len(sel); sel.append(dir_col)
                 if time_col:
-                    actual_cols["time"] = cols[cols_lower.index(time_col)]
+                    pos["ts"]  = len(sel); sel.append(time_col)
 
-                select = ", ".join(actual_cols.values())
                 rows = con.execute(
-                    f"SELECT {select} FROM {table} ORDER BY rowid DESC LIMIT 5000"
+                    f"SELECT {', '.join(sel)} FROM {table} "
+                    f"ORDER BY rowid DESC LIMIT 10000"
                 ).fetchall()
 
+                print(f"    [db] {table}: {len(rows)} rows "
+                      f"(phone={phone_col}, body={body_col})")
+
                 for row in rows:
-                    phone_raw = str(row[0] or "")
-                    content = str(row[1] or "")
-                    direction = ""
-                    timestamp = ""
-
-                    if "direction" in actual_cols:
-                        d = row[list(actual_cols.keys()).index("direction")]
-                        if str(d) in ("1", "send", "outgoing", "sent"):
-                            direction = "outbound"
-                        else:
-                            direction = "inbound"
-
-                    if "time" in actual_cols:
-                        t = row[list(actual_cols.keys()).index("time")]
-                        timestamp = str(t or "")
+                    phone_raw = str(row[pos["phone"]] or "").strip()
+                    content   = str(row[pos["body"]]  or "").strip()
+                    if not phone_raw or not content:
+                        continue
 
                     phone = _normalize_phone(phone_raw)
-                    if phone and content:
-                        results.append({
-                            "phone": phone,
-                            "content": content,
-                            "direction": direction,
-                            "timestamp": timestamp,
-                        })
+                    if not phone:
+                        continue
 
-            except Exception:
+                    direction = ""
+                    if "dir" in pos:
+                        raw_d = str(row[pos["dir"]] or "").strip().lower()
+                        if raw_d in ("1", "true", "send", "sent", "outgoing", "out"):
+                            direction = "outbound"
+                        elif raw_d in ("0", "false", "recv", "received",
+                                       "incoming", "in"):
+                            direction = "inbound"
+
+                    timestamp = str(row[pos["ts"]] or "").strip() if "ts" in pos else ""
+
+                    results.append({
+                        "phone":     phone,
+                        "content":   content,
+                        "direction": direction,
+                        "timestamp": timestamp,
+                    })
+
+            except Exception as e:
+                print(f"    [db] Error reading table {table}: {e}")
                 continue
 
         con.close()
-    except Exception:
-        pass
+
+    except Exception as e:
+        print(f"  [db] Error opening {db_path}: {e}")
     finally:
         try:
             os.unlink(tmp.name)
@@ -267,35 +375,457 @@ def _scan_zoom_db(db_path: str) -> list:
     return results
 
 
-# ─── Extract sender name from outbound template ─────────────────────────────
+def scan_zoom_databases() -> dict:
+    """
+    Scan all Zoom .db files under Roaming + Local AppData.
+    Returns {phone: {contact_name, messages, classification, last_reply, message_count}}.
+    Writes all results to conversations.db and outreach_log.
+    """
+    all_dbs = _find_all_zoom_dbs()
+    if not all_dbs:
+        print("  [db] No Zoom .db files found.")
+        print(f"       Searched: {os.environ.get('APPDATA', '?')}\\Zoom\\**\\*.db")
+        print(f"       Searched: {os.environ.get('LOCALAPPDATA', '?')}\\Zoom\\**\\*.db")
+        return {}
 
-def _extract_name_from_template(outbound_text: str) -> str:
+    print(f"  [db] Found {len(all_dbs)} Zoom .db file(s) total")
+
+    all_messages = []
+    for path in all_dbs:
+        if not _has_sms_tables(path):
+            continue
+        print(f"  [db] Scanning: {path}")
+        msgs = _scan_one_db(path)
+        all_messages.extend(msgs)
+        print(f"       → {len(msgs)} message rows")
+
+    if not all_messages:
+        print("  [db] No SMS messages found in any database.")
+        return {}
+
+    print(f"  [db] Total rows extracted: {len(all_messages)}")
+
+    by_phone = defaultdict(list)
+    for msg in all_messages:
+        by_phone[msg["phone"]].append(msg)
+
+    conversations = {}
+    for phone, msgs in by_phone.items():
+        msgs.sort(key=lambda m: m.get("timestamp", ""))
+
+        contact_name = ""
+        for msg in msgs:
+            if msg.get("direction") == "outbound":
+                contact_name = _extract_name_from_template(msg["content"])
+                if contact_name:
+                    break
+
+        last_inbound = next(
+            (m["content"] for m in reversed(msgs)
+             if m.get("direction") == "inbound"),
+            ""
+        )
+        classification = classify_reply(last_inbound) if last_inbound else "NO_REPLY"
+
+        conversations[phone] = {
+            "contact_name":  contact_name,
+            "messages":      msgs,
+            "classification": classification,
+            "last_reply":    last_inbound,
+            "message_count": len(msgs),
+        }
+
+        _save_convo_db(phone, contact_name, msgs, classification)
+        _write_outreach_log(phone, contact_name, msgs, classification)
+
+    print(f"  [db] Saved {len(conversations)} conversations.")
+    return conversations
+
+
+# =============================================================================
+# WINDOW HELPERS
+# =============================================================================
+
+def _get_zoom_hwnd():
+    if not HAS_WIN32:
+        return None
+    hwnd = win32gui.FindWindow(None, "Zoom")
+    if hwnd and win32gui.IsWindowVisible(hwnd):
+        return hwnd
+    matches = []
+    def _cb(h, _):
+        if win32gui.IsWindowVisible(h) and "Zoom" in win32gui.GetWindowText(h):
+            matches.append(h)
+    win32gui.EnumWindows(_cb, None)
+    return matches[0] if matches else None
+
+
+def _bring_zoom_to_front() -> bool:
+    """Focus the Zoom window. Returns True if successful."""
+    hwnd = _get_zoom_hwnd()
+    if hwnd and HAS_WIN32:
+        try:
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.SetForegroundWindow(hwnd)
+            time.sleep(0.7)
+            return True
+        except Exception as e:
+            print(f"  [win32] SetForegroundWindow: {e}")
+
+    # Fallback — PowerShell AppActivate works without win32
+    try:
+        subprocess.run(
+            ["powershell", "-Command",
+             "(New-Object -ComObject WScript.Shell).AppActivate('Zoom')"],
+            capture_output=True, timeout=5
+        )
+        time.sleep(1.3)
+        return True
+    except Exception as e:
+        print(f"  [screen] Could not focus Zoom: {e}")
+        return False
+
+
+def _zoom_rect() -> tuple:
+    """Return (left, top, right, bottom) of the Zoom window."""
+    if HAS_WIN32:
+        hwnd = _get_zoom_hwnd()
+        if hwnd:
+            try:
+                return win32gui.GetWindowRect(hwnd)
+            except Exception:
+                pass
+    w, h = pyautogui.size()
+    return (0, 0, w, h)
+
+
+# =============================================================================
+# SCREEN SCRAPE — MESSAGE PANE
+#
+# THE KEY FIX vs the old code:
+#   Old code did pyautogui.hotkey("ctrl", "a") immediately after focusing Zoom.
+#   This selected whatever widget happened to have keyboard focus — usually the
+#   navigation sidebar or search box, not the message thread.
+#
+#   The fix: click at MSG_PANE_X_PCT (72% across the window) FIRST to give the
+#   message thread area keyboard focus, then Ctrl+A selects only its content.
+# =============================================================================
+
+def _read_message_pane() -> str:
     """
-    Extract the contact's first name from the outbound SMS template.
-    Templates start with "Hey {first_name}," or "Hi {first_name},"
+    Click inside the message pane then Ctrl+A / Ctrl+C.
+    Returns the clipboard text, or '' on failure.
     """
-    if not outbound_text:
-        return ""
-    m = re.match(
-        r"(?:Hey|Hi|Hello|Dear)\s+([A-Z][a-z]+)",
-        outbound_text.strip(),
+    left, top, right, bottom = _zoom_rect()
+    w = right  - left
+    h = bottom - top
+
+    click_x = left + int(w * MSG_PANE_X_PCT)
+    click_y = top  + int(h * MSG_PANE_Y_PCT)
+
+    pyperclip.copy("")
+    pyautogui.click(click_x, click_y)
+    time.sleep(0.25)
+
+    pyautogui.hotkey("ctrl", "a")
+    time.sleep(0.35)
+    pyautogui.hotkey("ctrl", "c")
+    time.sleep(0.45)
+
+    text = pyperclip.paste()
+    return text if text and len(text) > 15 else ""
+
+
+# =============================================================================
+# SCREEN SCRAPE — CONVERSATION LIST NAVIGATION
+# =============================================================================
+
+def _click_conversation_row(visible_row: int,
+                             left: int, top: int,
+                             win_w: int, win_h: int):
+    """
+    Click a row in the left conversation list.
+    visible_row 0 = first visible entry, 1 = second, etc.
+    When the target would be below the window, scroll the list first.
+    """
+    list_x   = left + int(win_w * CONVO_LIST_X_PCT)
+    first_y  = top  + int(win_h * CONVO_FIRST_Y_PCT)
+    target_y = first_y + visible_row * CONVO_ROW_HEIGHT
+    list_btm = top  + win_h - 40   # leave 40px margin at bottom
+
+    if target_y > list_btm:
+        # Scroll the list pane down 3 steps to reveal more rows
+        mid_y = top + int(win_h * 0.55)
+        pyautogui.moveTo(list_x, mid_y)
+        for _ in range(3):
+            pyautogui.scroll(-3)
+            time.sleep(0.12)
+        # After scroll, click the first visible slot (now shows new rows)
+        pyautogui.click(list_x, first_y)
+    else:
+        pyautogui.click(list_x, target_y)
+
+    time.sleep(CONVO_LOAD_WAIT)
+
+
+# =============================================================================
+# SCREEN SCRAPE — TEXT PARSER
+# =============================================================================
+
+def _parse_pane_text(raw: str) -> dict:
+    """
+    Parse raw text copied from a Zoom SMS message pane.
+
+    Typical format:
+        +14155550100
+        Today 2:35 PM
+        Hey James, we're hosting a summit ...   ← our outbound
+        Today 3:01 PM
+        Sure sounds interesting                  ← their inbound reply
+    """
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+
+    # ── Phone number ──────────────────────────────────────────────────────
+    phone = ""
+    for line in lines[:15]:
+        m = re.search(r"\+?\d[\d\s\-\(\)]{8,}", line)
+        if m:
+            cand = _normalize_phone(m.group(0))
+            if cand:
+                phone = cand
+                break
+
+    # ── Split into messages at timestamp markers ──────────────────────────
+    time_re = re.compile(
+        r"^(?:Today|Yesterday|"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+        r"\s+\d{1,2}(?:,?\s*\d{4})?)"
+        r"[\s,]+\d{1,2}:\d{2}(?:\s*[AP]M)?",
         re.IGNORECASE,
     )
-    return m.group(1) if m else ""
+    junk = {"sms", "phone", "zoom phone", "zoom", "message", "reply", "send"}
+
+    messages   = []
+    buf        = []
+    current_ts = ""
+
+    for line in lines:
+        if line.lower() in junk:
+            continue
+        if time_re.match(line):
+            if buf:
+                messages.append({
+                    "content":   " ".join(buf).strip(),
+                    "direction": "",
+                    "timestamp": current_ts,
+                })
+                buf = []
+            current_ts = line
+            continue
+        buf.append(line)
+
+    if buf:
+        messages.append({"content": " ".join(buf).strip(),
+                         "direction": "", "timestamp": current_ts})
+
+    # ── Infer direction + extract contact name ────────────────────────────
+    contact_name = ""
+    for msg in messages:
+        name = _extract_name_from_template(msg["content"])
+        if name:
+            msg["direction"] = "outbound"
+            contact_name     = name
+
+    found_out = False
+    for msg in messages:
+        if msg["direction"] == "outbound":
+            found_out = True
+            continue
+        if found_out and not msg["direction"]:
+            # Short messages are replies; long ones are probably our templates
+            msg["direction"] = "inbound" if len(msg["content"]) < 250 else "outbound"
+
+    last_reply = next(
+        (m["content"] for m in reversed(messages) if m.get("direction") == "inbound"),
+        ""
+    )
+    classification = classify_reply(last_reply) if last_reply else "NO_REPLY"
+
+    return {
+        "phone":          phone,
+        "contact_name":   contact_name,
+        "messages":       messages,
+        "classification": classification,
+        "last_reply":     last_reply,
+    }
 
 
-# ─── Classify reply ──────────────────────────────────────────────────────────
+# =============================================================================
+# SCREEN SCRAPE — BULK LOOP
+# =============================================================================
+
+def screen_scrape_all(max_convos: int = MAX_SCREEN_CONVOS) -> list:
+    """
+    Iterate through every conversation in Zoom's SMS left-pane list.
+
+    Steps:
+      1. Bring Zoom to the front.
+      2. Click the first conversation row.
+      3. Read the message pane (click pane → Ctrl+A → Ctrl+C).
+      4. Parse + save.
+      5. Click the next row.
+      6. Stop when the pane content stops changing (end of list).
+    """
+    if not HAS_GUI:
+        print("  [screen] pyautogui / pyperclip not installed — skipping.")
+        return []
+
+    print("  [screen] Bringing Zoom to the front...")
+    if not _bring_zoom_to_front():
+        print("  [screen] Zoom not found. Is it running?")
+        return []
+
+    time.sleep(0.6)
+    left, top, right, bottom = _zoom_rect()
+    win_w = right  - left
+    win_h = bottom - top
+    print(f"  [screen] Zoom window: ({left},{top}) → ({right},{bottom})")
+
+    results     = []
+    seen_phones = set()
+    prev_raw    = ""
+    no_change   = 0
+    visible_row = 0    # row index within the currently visible list page
+
+    print(f"  [screen] Starting bulk scan (max {max_convos})...")
+    _click_conversation_row(0, left, top, win_w, win_h)
+
+    for i in range(max_convos):
+        raw = _read_message_pane()
+
+        if not raw:
+            print(f"  [screen] Empty pane at iteration {i} — stopping.")
+            break
+
+        # End-of-list detection: pane text unchanged 3× in a row
+        if raw[:80] == prev_raw[:80]:
+            no_change += 1
+            if no_change >= 3:
+                print("  [screen] Pane unchanged 3× — reached end of list.")
+                break
+            # Loading delay? Try nudging to the next row
+            visible_row += 1
+            if visible_row >= 8:
+                visible_row = 0
+            _click_conversation_row(visible_row, left, top, win_w, win_h)
+            continue
+
+        no_change = 0
+        prev_raw  = raw
+        parsed    = _parse_pane_text(raw)
+        phone     = parsed.get("phone", "")
+
+        if phone and phone not in seen_phones:
+            seen_phones.add(phone)
+            name = parsed.get("contact_name", "")
+            cls  = parsed.get("classification", "UNKNOWN")
+            nmsg = len(parsed.get("messages", []))
+            print(f"  [screen] [{i+1:>3}] {phone:<16} {name or '—':<15} "
+                  f"{cls:<14} {nmsg} msgs")
+            _save_convo_db(phone, name, parsed["messages"], cls)
+            _write_outreach_log(phone, name, parsed["messages"], cls)
+            results.append(parsed)
+        elif not phone:
+            print(f"  [screen] [{i+1:>3}] No phone number extracted — skipping.")
+
+        # Advance to next row; scroll when we'd go off-screen
+        visible_row += 1
+        if visible_row >= 8:
+            visible_row = 0   # triggers scroll inside _click_conversation_row
+        _click_conversation_row(visible_row, left, top, win_w, win_h)
+
+    print(f"  [screen] Done — {len(results)} new conversations captured.")
+    return results
+
+
+# =============================================================================
+# SINGLE CONVERSATION READ
+# =============================================================================
+
+def read_current_conversation(auto: bool = False) -> dict:
+    """Read only the currently visible conversation from screen."""
+    if not HAS_GUI:
+        print("  pyautogui not available — pip install pyautogui pyperclip")
+        return {}
+
+    if auto:
+        _bring_zoom_to_front()
+    else:
+        print("  Navigate to the Zoom conversation you want to read.")
+        input("  Press ENTER when ready...")
+
+    raw = _read_message_pane()
+    if not raw:
+        print("  Could not read message pane (clipboard empty).")
+        return {}
+
+    parsed = _parse_pane_text(raw)
+    if parsed.get("phone"):
+        _save_convo_db(parsed["phone"], parsed["contact_name"],
+                       parsed["messages"], parsed["classification"])
+        _write_outreach_log(parsed["phone"], parsed["contact_name"],
+                            parsed["messages"], parsed["classification"])
+    return parsed
+
+
+# =============================================================================
+# HELPERS
+# =============================================================================
+
+def _normalize_phone(raw: str) -> str:
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if s.startswith("+"):
+        d = re.sub(r"\D+", "", s)
+        return ("+" + d) if len(d) >= 7 else ""
+    d = re.sub(r"\D+", "", s)
+    if len(d) == 10:                  return "+1" + d
+    if len(d) == 11 and d[0] == "1": return "+"  + d
+    if len(d) >= 7:                   return "+"  + d
+    return ""
+
+
+def _extract_name_from_template(text: str) -> str:
+    """Pull first name from 'Hey James,' / 'Hi Dr Smith,' style templates."""
+    m = re.match(
+        r"(?:Hey|Hi|Hello|Dear)\s+(?:Mr\.?|Mrs\.?|Ms\.?|Dr\.?|Prof\.?)?\s*"
+        r"([A-Z][a-z]{1,25})",
+        (text or "").strip(),
+        re.IGNORECASE,
+    )
+    return m.group(1).capitalize() if m else ""
+
 
 _REPLY_CLASSES = {
-    "STOP": ["stop", "unsubscribe", "opt out", "remove me", "do not text",
-             "dont text", "don't text", "no more", "wrong number"],
-    "INTERESTED": ["interested", "sounds good", "tell me more", "love to",
-                   "yes", "sure", "sign me up", "count me in", "send me",
-                   "i'm in", "im in"],
-    "NOT_INTERESTED": ["not interested", "no thanks", "no thank you",
-                       "pass", "decline", "not for me", "wrong person"],
-    "MEETING": ["call", "meeting", "schedule", "available", "free",
-                "let's chat", "let's talk"],
+    "STOP": [
+        "stop", "unsubscribe", "opt out", "remove me", "do not text",
+        "dont text", "don't text", "no more", "wrong number", "remove",
+    ],
+    "INTERESTED": [
+        "interested", "sounds good", "tell me more", "love to", "yes",
+        "sure", "sign me up", "count me in", "send me", "i'm in", "im in",
+        "definitely", "absolutely", "would love",
+    ],
+    "NOT_INTERESTED": [
+        "not interested", "no thanks", "no thank you", "pass", "decline",
+        "not for me", "wrong person", "not relevant",
+    ],
+    "MEETING": [
+        "call", "meeting", "schedule", "available", "free",
+        "let's chat", "let's talk", "jump on", "happy to discuss",
+    ],
 }
 
 
@@ -307,315 +837,172 @@ def classify_reply(text: str) -> str:
     return "UNKNOWN"
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _normalize_phone(raw: str) -> str:
-    if not raw:
-        return ""
-    s = str(raw).strip()
-    if s.startswith("+"):
-        digits = re.sub(r"\D+", "", s)
-        if len(digits) >= 7:
-            return "+" + digits
-    digits = re.sub(r"\D+", "", s)
-    if len(digits) == 10:
-        return "+1" + digits
-    if len(digits) == 11 and digits.startswith("1"):
-        return "+" + digits
-    if len(digits) >= 7:
-        return "+" + digits
-    return ""
-
-
-# ─── ZoomReader ──────────────────────────────────────────────────────────────
+# =============================================================================
+# ZoomReader CLASS  (public API used by app.py)
+# =============================================================================
 
 class ZoomReader:
-    """Read Zoom SMS conversations from local DB and/or screen."""
+    """High-level interface — used by app.py and other importers."""
 
     def __init__(self):
         _init_convo_db()
 
+    def run_full_scan(self) -> dict:
+        """
+        Full pipeline: DB scan first, then screen scrape.
+        Called by app.py when launched with --auto.
+        """
+        print("\n  ══ ZOOM SMS FULL SCAN ══\n")
+        results = {}
+
+        print("  Phase 1 — Direct database scan")
+        db_res = scan_zoom_databases()
+        results.update(db_res)
+        print(f"  DB scan: {len(db_res)} conversations\n")
+
+        if HAS_GUI:
+            print("  Phase 2 — Screen scrape (supplements DB)")
+            screen_res = screen_scrape_all()
+            added = sum(
+                1 for r in screen_res
+                if r.get("phone") and r["phone"] not in results
+                and not results.update({r["phone"]: {
+                    "contact_name":  r.get("contact_name", ""),
+                    "messages":      r.get("messages", []),
+                    "classification": r.get("classification", "UNKNOWN"),
+                    "last_reply":    r.get("last_reply", ""),
+                    "message_count": len(r.get("messages", [])),
+                }})
+            )
+            print(f"  Screen scan added {added} new conversation(s)\n")
+        else:
+            print("  Phase 2 — Skipped (pyautogui not installed)\n")
+
+        print(f"  Total saved: {len(results)}")
+        return results
+
     def scan_zoom_database(self) -> dict:
-        """
-        Scan Zoom's local SQLite DB for all SMS messages.
-        Groups by phone number, extracts contact names from outbound templates.
+        return scan_zoom_databases()
 
-        Returns dict: {phone: {contact_name, messages: [...], classification}}
-        """
-        db_paths = _find_zoom_db_paths()
-        if not db_paths:
-            print("  No Zoom database found at %APPDATA%/Zoom/data/")
-            return {}
+    def read_screen_conversation(self, auto: bool = False) -> dict:
+        return read_current_conversation(auto=auto)
 
-        print(f"  Found {len(db_paths)} Zoom DB file(s)")
-        all_messages = []
-        for dbp in db_paths:
-            msgs = _scan_zoom_db(dbp)
-            all_messages.extend(msgs)
-            print(f"    {dbp} → {len(msgs)} messages")
-
-        # Group by phone
-        by_phone = defaultdict(list)
-        for msg in all_messages:
-            by_phone[msg["phone"]].append(msg)
-
-        conversations = {}
-        for phone, msgs in by_phone.items():
-            # Sort by timestamp if available
-            msgs.sort(key=lambda m: m.get("timestamp", ""))
-
-            # Extract contact name from first outbound message
-            contact_name = ""
-            for msg in msgs:
-                if msg.get("direction") == "outbound":
-                    contact_name = _extract_name_from_template(msg["content"])
-                    if contact_name:
-                        break
-
-            # Classify based on last inbound message
-            last_inbound = ""
-            for msg in reversed(msgs):
-                if msg.get("direction") == "inbound":
-                    last_inbound = msg["content"]
-                    break
-
-            classification = classify_reply(last_inbound) if last_inbound else "NO_REPLY"
-
-            conversations[phone] = {
-                "contact_name": contact_name,
-                "messages": msgs,
-                "classification": classification,
-                "last_reply": last_inbound,
-                "message_count": len(msgs),
-            }
-
-            # Save to local DB
-            save_conversation(phone, contact_name, msgs, classification)
-
-        return conversations
-
-    def read_screen_conversation(self) -> dict:
-        """
-        Read the currently visible Zoom SMS conversation from screen.
-        Uses Ctrl+A/Ctrl+C to grab the conversation text.
-
-        Returns {phone, contact_name, messages, classification}
-        """
-        if not HAS_PYAUTOGUI:
-            print("  pyautogui not available. Install: pip install pyautogui pyperclip")
-            return {}
-
-        print("  Reading visible Zoom conversation...")
-        print("  Make sure Zoom Phone SMS tab is visible and a conversation is open.")
-        input("  Press ENTER when ready...")
-
-        # Copy conversation text
-        pyperclip.copy("")
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.4)
-        pyautogui.hotkey("ctrl", "c")
-        time.sleep(0.5)
-        pyautogui.press("escape")
-        time.sleep(0.2)
-
-        raw = pyperclip.paste()
-        if not raw or len(raw) < 20:
-            print("  Clipboard empty — couldn't read conversation.")
-            return {}
-
-        return self._parse_conversation_text(raw)
-
-    def _parse_conversation_text(self, raw: str) -> dict:
-        """Parse raw Ctrl+A text from a Zoom SMS conversation."""
-        lines = [l.strip() for l in raw.splitlines() if l.strip()]
-
-        # Try to find the phone number (usually at top of conversation)
-        phone = ""
-        for line in lines[:10]:
-            m = re.search(r"\+?\d[\d\s\-()]{8,}", line)
-            if m:
-                phone = _normalize_phone(m.group(0))
-                if phone:
-                    break
-
-        # Parse messages — look for timestamp patterns
-        # Zoom typically shows: "Today 2:35 PM" or "Mar 5 10:15 AM"
-        messages = []
-        current_content = []
-        current_direction = ""
-
-        time_re = re.compile(
-            r"^(?:Today|Yesterday|"
-            r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2})"
-            r"\s+\d{1,2}:\d{2}\s*(?:AM|PM)?",
-            re.IGNORECASE,
-        )
-
-        for line in lines:
-            if time_re.match(line):
-                # Save previous message
-                if current_content:
-                    text = " ".join(current_content)
-                    messages.append({
-                        "content": text,
-                        "direction": current_direction,
-                        "timestamp": "",
-                    })
-                current_content = []
-                current_direction = ""
-                continue
-
-            if not line or line in ("SMS", "Phone", "Zoom Phone"):
-                continue
-
-            current_content.append(line)
-
-        # Save last message
-        if current_content:
-            text = " ".join(current_content)
-            messages.append({
-                "content": text,
-                "direction": "",
-                "timestamp": "",
-            })
-
-        # Try to determine direction and extract contact name
-        # The first long message is likely our outbound template
-        contact_name = ""
-        for msg in messages:
-            text = msg["content"]
-            name = _extract_name_from_template(text)
-            if name:
-                msg["direction"] = "outbound"
-                contact_name = name
-                break
-
-        # Any message after an outbound that doesn't look like our template
-        # is likely inbound
-        found_outbound = False
-        for msg in messages:
-            if msg["direction"] == "outbound":
-                found_outbound = True
-                continue
-            if found_outbound and not msg["direction"]:
-                # Short messages are likely replies (inbound)
-                if len(msg["content"]) < 200:
-                    msg["direction"] = "inbound"
-                else:
-                    msg["direction"] = "outbound"
-
-        # Classify
-        last_reply = ""
-        for msg in reversed(messages):
-            if msg.get("direction") == "inbound":
-                last_reply = msg["content"]
-                break
-
-        classification = classify_reply(last_reply) if last_reply else "NO_REPLY"
-
-        result = {
-            "phone": phone,
-            "contact_name": contact_name,
-            "messages": messages,
-            "classification": classification,
-            "last_reply": last_reply,
-        }
-
-        # Save
-        if phone:
-            save_conversation(phone, contact_name, messages, classification)
-
-        return result
+    def scrape_all_conversations(self) -> list:
+        if not _bring_zoom_to_front():
+            print("  Cannot focus Zoom — is it running?")
+            return []
+        return screen_scrape_all()
 
     def get_stored_conversations(self) -> list:
-        """Get all previously stored conversations."""
-        return load_all_conversations()
+        return _load_all_convos()
 
     def get_replies_only(self) -> list:
-        """Get only conversations that have inbound replies."""
-        all_convos = load_all_conversations()
-        return [c for c in all_convos
+        return [c for c in _load_all_convos()
                 if c.get("direction") == "inbound" and c.get("last_message")]
 
 
-# ─── CLI ─────────────────────────────────────────────────────────────────────
+# =============================================================================
+# CLI
+# =============================================================================
+
+def _print_table(convos: dict):
+    from collections import Counter
+    print(f"\n  {'Phone':<16} {'Name':<15} {'Msgs':>4}  {'Class':<16} {'Last reply'}")
+    print(f"  {'─'*16} {'─'*15} {'─'*4}  {'─'*16} {'─'*35}")
+    for phone, data in sorted(convos.items(),
+                              key=lambda x: x[1].get("classification", "")):
+        name = (data.get("contact_name") or "—")[:14]
+        cnt  = data.get("message_count", len(data.get("messages", [])))
+        cls  = (data.get("classification") or "—")[:15]
+        last = (data.get("last_reply") or "—")[:35]
+        print(f"  {phone:<16} {name:<15} {cnt:>4}  {cls:<16} {last}")
+    counts = Counter(d.get("classification", "—") for d in convos.values())
+    print("\n  Summary:")
+    for cls, n in sorted(counts.items()):
+        print(f"    {cls:<16} — {n}")
+    print()
+
 
 def main():
     print()
-    print("=" * 56)
+    print("=" * 58)
     print("  ZOOM SMS READER")
-    print("=" * 56)
+    print("=" * 58)
 
     reader = ZoomReader()
 
+    # app.py launches with --auto — run full pipeline then exit
+    if "--auto" in sys.argv:
+        print("\n  [AUTO] Full scan (DB + screen scrape)...")
+        results = reader.run_full_scan()
+        _print_table(results) if results else print("  No conversations found.\n")
+        return
+
     print("\n  Options:")
-    print("  1) Scan Zoom database for messages")
-    print("  2) Read current on-screen conversation")
-    print("  3) View stored conversations")
-    print("  4) View replies only")
+    print("  1) Full scan — DB + screen (recommended)")
+    print("  2) DB scan only              (no Zoom window needed)")
+    print("  3) Screen — iterate all conversations")
+    print("  4) Screen — read current visible conversation only")
+    print("  5) View stored conversations")
+    print("  6) View reply conversations only")
     print()
 
     choice = input("  → ").strip()
 
     if choice == "1":
-        print("\n  Scanning Zoom local database...")
-        convos = reader.scan_zoom_database()
-        if not convos:
-            print("  No conversations found.\n")
-            return
-
-        print(f"\n  Found {len(convos)} conversations:\n")
-        print(f"  {'Phone':<16} {'Name':<15} {'Msgs':>4} {'Class':<17} {'Last Reply'}")
-        print(f"  {'─'*16} {'─'*15} {'─'*4} {'─'*17} {'─'*30}")
-
-        for phone, data in sorted(convos.items(),
-                                    key=lambda x: x[1].get("classification", "")):
-            name = data["contact_name"] or "—"
-            cnt  = data["message_count"]
-            cls  = data["classification"]
-            last = (data.get("last_reply") or "—")[:40]
-            print(f"  {phone:<16} {name:<15} {cnt:>4} {cls:<17} {last}")
-
-        # Summary
-        from collections import Counter
-        counts = Counter(d["classification"] for d in convos.values())
-        print(f"\n  Summary:")
-        for cls, cnt in sorted(counts.items()):
-            print(f"    {cls:<17} — {cnt}")
+        results = reader.run_full_scan()
+        _print_table(results) if results else print("  Nothing found.\n")
 
     elif choice == "2":
+        print("\n  Scanning Zoom databases...")
+        convos = reader.scan_zoom_database()
+        _print_table(convos) if convos else print("  No conversations found.\n")
+
+    elif choice == "3":
+        print("\n  Starting bulk screen scrape...")
+        convos = reader.scrape_all_conversations()
+        if convos:
+            from collections import Counter
+            counts = Counter(c["classification"] for c in convos)
+            print(f"\n  Scraped {len(convos)} conversations:")
+            for cls, n in sorted(counts.items()):
+                print(f"    {cls:<16} — {n}")
+        else:
+            print("  Nothing scraped.\n")
+
+    elif choice == "4":
         result = reader.read_screen_conversation()
         if result:
-            print(f"\n  Phone:    {result.get('phone', '—')}")
-            print(f"  Contact:  {result.get('contact_name', '—')}")
-            print(f"  Class:    {result.get('classification', '—')}")
-            print(f"  Messages: {len(result.get('messages', []))}")
+            print(f"\n  Phone      : {result.get('phone', '—')}")
+            print(f"  Contact    : {result.get('contact_name', '—')}")
+            print(f"  Class      : {result.get('classification', '—')}")
+            print(f"  Messages   : {len(result.get('messages', []))}")
             if result.get("last_reply"):
-                print(f"  Last reply: {result['last_reply'][:100]}")
+                print(f"  Last reply : {result['last_reply'][:100]}")
         else:
             print("  Could not read conversation.")
 
-    elif choice == "3":
+    elif choice == "5":
         convos = reader.get_stored_conversations()
         if not convos:
             print("  No stored conversations.\n")
             return
         print(f"\n  {len(convos)} stored conversations:\n")
-        for c in convos[:30]:
-            name = c.get("contact_name") or "—"
+        for c in convos[:50]:
+            name = (c.get("contact_name") or "—")[:14]
             last = (c.get("last_message") or "—")[:50]
-            print(f"  {c['phone']:<16} {name:<15} [{c['classification']}] {last}")
+            print(f"  {c['phone']:<16} {name:<15} [{c['classification']:<14}] {last}")
 
-    elif choice == "4":
+    elif choice == "6":
         replies = reader.get_replies_only()
         if not replies:
             print("  No reply conversations found.\n")
             return
         print(f"\n  {len(replies)} conversations with replies:\n")
         for c in replies:
-            name = c.get("contact_name") or "—"
+            name = (c.get("contact_name") or "—")[:14]
             last = (c.get("last_message") or "—")[:50]
-            print(f"  {c['phone']:<16} {name:<15} [{c['classification']}] {last}")
+            print(f"  {c['phone']:<16} {name:<15} [{c['classification']:<14}] {last}")
 
     print()
 

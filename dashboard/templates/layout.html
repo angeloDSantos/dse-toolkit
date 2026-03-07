@@ -50,7 +50,7 @@
         <div class="sidebar-footer" style="display:flex; justify-content:space-between; align-items:center;">
             <div class="version">v2.0 — Local Mode</div>
             <button id="theme-toggle" class="btn btn-outline btn-xs" style="padding: 4px 8px; font-size: 14px; line-height: 1; border-color: transparent;" title="Toggle Theme">
-                <span id="theme-icon">☀️</span>
+                <span id="theme-icon">🌙</span>
             </button>
         </div>
     </aside>
@@ -81,13 +81,13 @@
             const toggle = document.getElementById('theme-toggle');
             if(toggle) {
                 const icon = document.getElementById('theme-icon');
-                icon.textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+                icon.textContent = savedTheme === 'dark' ? '🌙' : '☀️';
                 toggle.addEventListener('click', () => {
                     const currentTheme = document.documentElement.getAttribute('data-theme');
                     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
                     document.documentElement.setAttribute('data-theme', newTheme);
                     localStorage.setItem('theme', newTheme);
-                    icon.textContent = newTheme === 'dark' ? '☀️' : '🌙';
+                    icon.textContent = newTheme === 'dark' ? '🌙' : '☀️';
                 });
             }
         });

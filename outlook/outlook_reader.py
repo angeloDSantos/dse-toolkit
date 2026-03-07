@@ -256,12 +256,22 @@ class OutlookReader:
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 def main():
+    import sys
     print()
     print("=" * 56)
     print("  OUTLOOK EMAIL READER")
     print("=" * 56)
 
     reader = OutlookReader()
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--auto":
+        print("\n  [AUTO-MODE] Reading inbox (last 7 days)...\n")
+        emails = reader.read_inbox(days=7)
+        if not emails:
+            print("  No emails found.\n")
+        else:
+            print(f"  Found {len(emails)} emails. Processed successfully.\n")
+        return
 
     # Show available folders
     folders = reader.get_folders()

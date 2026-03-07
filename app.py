@@ -44,7 +44,18 @@ LOGIN_PASSWORD = "gds2027"
 
 # Track running background processes
 _processes = {}
+_process_logs = {}
 _process_lock = threading.Lock()
+
+def _stream_logs(tool, proc):
+    """Read lines from a process stdout and store them."""
+    for line in iter(proc.stdout.readline, ""):
+        with _process_lock:
+            if tool not in _process_logs:
+                _process_logs[tool] = []
+            _process_logs[tool].append(line.rstrip('\n'))
+            if len(_process_logs[tool]) > 500:
+                _process_logs[tool].pop(0)
 
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
@@ -366,11 +377,18 @@ def launch_tool(tool):
             return redirect(url_for("outreach"))
 
         proc = subprocess.Popen(
-            ["python", script],
+            ["python", script, "--auto"],
             cwd=os.path.dirname(os.path.abspath(__file__)),
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            # No CREATE_NEW_CONSOLE to keep it totally hidden!
         )
         _processes[tool] = proc
+        _process_logs[tool] = []
+        t = threading.Thread(target=_stream_logs, args=(tool, proc), daemon=True)
+        t.start()
 
     flash(f"{tool} launched in new window", "success")
     return redirect(url_for("outreach"))
@@ -497,6 +515,18 @@ def api_tool_status():
         for name, proc in _processes.items():
             status[name] = "running" if proc.poll() is None else "stopped"
     return jsonify(status)
+
+@app.route("/api/outreach/logs/<tool>")
+def api_outreach_logs(tool):
+    with _process_lock:
+        lines = _process_logs.get(tool, [])
+        is_running = False
+        if tool in _processes and _processes[tool].poll() is None:
+            is_running = True
+    return jsonify({
+        "status": "running" if is_running else "stopped",
+        "logs": lines
+    })
 
 
 # ─── Scraper Routes ─────────────────────────────────────────────────────────

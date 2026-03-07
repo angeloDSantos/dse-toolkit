@@ -13,6 +13,7 @@
     --bg-card-hover: #1a2140;
     --bg-elevated:   #1e2545;
     --bg-input:      #0d1120;
+    --topbar-bg:     rgba(10, 14, 26, 0.6);
 
     /* ─── Borders ──────────────────────────────────────────── */
     --border:        rgba(99, 102, 241, 0.12);
@@ -89,6 +90,7 @@
     --bg-card-hover: #f1f5f9;
     --bg-elevated:   #ffffff;
     --bg-input:      #f8fafc;
+    --topbar-bg:     rgba(255, 255, 255, 0.85);
 
     --border:        rgba(99, 102, 241, 0.15);
     --border-strong: rgba(99, 102, 241, 0.25);
@@ -321,8 +323,9 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: rgba(10, 14, 26, 0.6);
+    background: var(--topbar-bg);
     backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     min-height: var(--topbar-h);
 }
 .page-title {

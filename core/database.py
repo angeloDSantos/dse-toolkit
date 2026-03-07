@@ -270,7 +270,7 @@ def log_outreach(channel, direction, content, **kwargs):
 
 def get_outreach_log(channel=None, direction=None, limit=100):
     db = get_db()
-    where = []
+    where = ["content NOT LIKE 'DNC %'"]
     params = []
     if channel:
         where.append("channel = ?")
@@ -278,7 +278,7 @@ def get_outreach_log(channel=None, direction=None, limit=100):
     if direction:
         where.append("direction = ?")
         params.append(direction)
-    clause = " WHERE " + " AND ".join(where) if where else ""
+    clause = " WHERE " + " AND ".join(where)
     params.append(limit)
     return db.execute(
         f"SELECT * FROM outreach_log{clause} ORDER BY id DESC LIMIT ?", params
