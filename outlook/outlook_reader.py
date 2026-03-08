@@ -265,12 +265,83 @@ def main():
     reader = OutlookReader()
 
     if len(sys.argv) > 1 and sys.argv[1] == "--auto":
-        print("\n  [AUTO-MODE] Reading inbox (last 7 days)...\n")
-        emails = reader.read_inbox(days=7)
-        if not emails:
-            print("  No emails found.\n")
-        else:
-            print(f"  Found {len(emails)} emails. Processed successfully.\n")
+        import time
+        
+        try:
+            from runtime import write_tool_state, read_tool_state
+            HAS_RUNTIME = True
+        except ImportError:
+            HAS_RUNTIME = False
+            
+        try:
+            from core.database import log_outreach
+            HAS_DB = True
+        except ImportError:
+            HAS_DB = False
+
+        if HAS_RUNTIME:
+            write_tool_state("outlook_reader", status="running")
+            
+        print("\n  [AUTO] Starting continuous inbox monitoring...")
+        print("  Checking for new replies every 5 minutes.\n")
+        
+        try:
+            while True:
+                if HAS_RUNTIME:
+                    state = read_tool_state("outlook_reader")
+                    if state.get("status") == "stopped_requested":
+                        break
+                        
+                emails = reader.read_inbox(days=1, max_emails=50)
+                
+                saved_count = 0
+                if HAS_DB:
+                    for e in emails:
+                        # Prevent logging empty emails
+                        if not e["from_email"] and not e["subject"]:
+                            continue
+                            
+                        try:
+                            log_outreach(
+                                channel="email",
+                                direction="inbound",
+                                content=f"Subject: {e['subject']}\n\n{e['body']}",
+                                contact_name=e["from_name"],
+                                contact_email=e["from_email"],
+                                contact_phone=e["phone"],
+                                classification=e["classification"],
+                                timestamp=e["received"],
+                                provider_message_id=e["message_id"] or None
+                            )
+                            saved_count += 1
+                        except Exception as log_err:
+                            pass
+                            
+                print(f"  [{datetime.now().time().strftime('%H:%M:%S')}] Checked inbox. Found {len(emails)} recent. Inserted/Ignored duplicates: {saved_count}.")
+                
+                # Check bounds before sleep if stop requested
+                # Sleep in increments so it can stop faster
+                for _ in range(300):
+                    if HAS_RUNTIME:
+                        st = read_tool_state("outlook_reader")
+                        if st.get("status") == "stopped_requested":
+                            break
+                    time.sleep(1)
+                    
+                if HAS_RUNTIME:
+                    st = read_tool_state("outlook_reader")
+                    if st.get("status") == "stopped_requested":
+                        break
+                        
+        except Exception as e:
+            if HAS_RUNTIME:
+                write_tool_state("outlook_reader", status="failed", error=str(e))
+            print(f"  [ERROR] Outlook Reader crashed: {e}")
+            return
+            
+        if HAS_RUNTIME:
+            write_tool_state("outlook_reader", status="stopped")
+        print("  [AUTO] Gracefully stopped.")
         return
 
     # Show available folders

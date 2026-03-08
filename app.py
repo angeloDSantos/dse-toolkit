@@ -17,6 +17,7 @@ from datetime import datetime
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import runtime
 from flask import (
     Flask, render_template, request, redirect, url_for,
     flash, jsonify, send_from_directory, session,
@@ -42,20 +43,9 @@ app.secret_key = "dse-toolkit-local-key-2024"
 
 LOGIN_PASSWORD = "gds2027"
 
-# Track running background processes
-_processes = {}
-_process_logs = {}
+# Track running background processes (active Popen objects only)
+_active_procs = {}
 _process_lock = threading.Lock()
-
-def _stream_logs(tool, proc):
-    """Read lines from a process stdout and store them."""
-    for line in iter(proc.stdout.readline, ""):
-        with _process_lock:
-            if tool not in _process_logs:
-                _process_logs[tool] = []
-            _process_logs[tool].append(line.rstrip('\n'))
-            if len(_process_logs[tool]) > 500:
-                _process_logs[tool].pop(0)
 
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
@@ -353,8 +343,15 @@ def create_campaign():
 def outreach():
     tool_status = {}
     with _process_lock:
-        for name, proc in _processes.items():
-            tool_status[name] = "running" if proc.poll() is None else "stopped"
+        for name in ["scraper", "zoom_sms", "outlook_reader", "outlook_sender"]:
+            state = runtime.read_tool_state(name)
+            st = state.get("status", "stopped")
+            if st == "running":
+                if name not in _active_procs or _active_procs[name].poll() is not None:
+                    st = "failed"
+                    runtime.write_tool_state(name, status="failed", error="Process exited unexpectedly")
+                    state = runtime.read_tool_state(name)
+            tool_status[name] = state
     return render_template("outreach.html", tool_status=tool_status)
 
 
@@ -372,35 +369,30 @@ def launch_tool(tool):
 
     script = scripts[tool]
     with _process_lock:
-        if tool in _processes and _processes[tool].poll() is None:
+        if tool in _active_procs and _active_procs[tool].poll() is None:
             flash(f"{tool} is already running", "warning")
             return redirect(url_for("outreach"))
 
-        proc = subprocess.Popen(
+        proc, _ = runtime.launch_tool(
+            tool,
             ["python", script, "--auto"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            # No CREATE_NEW_CONSOLE to keep it totally hidden!
+            cwd=os.path.dirname(os.path.abspath(__file__))
         )
-        _processes[tool] = proc
-        _process_logs[tool] = []
-        t = threading.Thread(target=_stream_logs, args=(tool, proc), daemon=True)
-        t.start()
+        _active_procs[tool] = proc
 
-    flash(f"{tool} launched in new window", "success")
+    flash(f"{tool} launched in background", "success")
     return redirect(url_for("outreach"))
 
 
 @app.route("/outreach/stop/<tool>", methods=["POST"])
 def stop_tool(tool):
     with _process_lock:
-        if tool in _processes and _processes[tool].poll() is None:
-            _processes[tool].terminate()
+        if tool in _active_procs and _active_procs[tool].poll() is None:
+            _active_procs[tool].terminate()
+            runtime.write_tool_state(tool, status="stopped")
             flash(f"{tool} stopped", "success")
         else:
+            runtime.write_tool_state(tool, status="stopped")
             flash(f"{tool} is not running", "warning")
     return redirect(url_for("outreach"))
 
@@ -512,20 +504,32 @@ def api_stats():
 def api_tool_status():
     status = {}
     with _process_lock:
-        for name, proc in _processes.items():
-            status[name] = "running" if proc.poll() is None else "stopped"
+        tools = ["scraper", "zoom_sms", "outlook_reader", "outlook_sender"]
+        for name in tools:
+            state = runtime.read_tool_state(name)
+            st = state.get("status", "stopped")
+            if st == "running":
+                if name not in _active_procs or _active_procs[name].poll() is not None:
+                    st = "failed"
+                    runtime.write_tool_state(name, status="failed", error="Process exited unexpectedly")
+            
+            status[name] = st
     return jsonify(status)
 
 @app.route("/api/outreach/logs/<tool>")
 def api_outreach_logs(tool):
     with _process_lock:
-        lines = _process_logs.get(tool, [])
-        is_running = False
-        if tool in _processes and _processes[tool].poll() is None:
-            is_running = True
+        state = runtime.read_tool_state(tool)
+        st = state.get("status", "stopped")
+        if st == "running" and (tool not in _active_procs or _active_procs[tool].poll() is not None):
+            st = "failed"
+            runtime.write_tool_state(tool, status="failed", error="Process exited unexpectedly")
+            
+        lines = runtime.tail_log(tool, n=200)
     return jsonify({
-        "status": "running" if is_running else "stopped",
-        "logs": lines
+        "status": st,
+        "logs": lines,
+        "log_path": state.get("log_path", "")
     })
 
 
@@ -593,18 +597,6 @@ def scraper_session(session_id):
 
 @app.route("/scraper/start", methods=["POST"])
 def scraper_start():
-    """Start a new scrape from the web UI."""
-    from src.scraper_runner import start_scrape, is_running
-
-    if is_running():
-        flash("A scrape is already running", "warning")
-        return redirect(url_for("scraper_page"))
-
-    scrape_name = request.form.get("scrape_name", "").strip()
-    if not scrape_name:
-        flash("Scrape name required", "error")
-        return redirect(url_for("scraper_page"))
-
     # Parse keywords
     keywords_raw = request.form.get("keywords", "").strip()
     keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()] if keywords_raw else []
@@ -620,6 +612,7 @@ def scraper_start():
                 exclusions.add(key)
 
     mode = request.form.get("mode", "mobile")
+    scrape_name = request.form.get("scrape_name", "").strip()
 
     config = {
         "scrape_name": scrape_name,
@@ -633,38 +626,75 @@ def scraper_start():
     }
 
     try:
-        session_id = start_scrape(config)
-        flash(f"Scrape '{scrape_name}' started (session #{session_id})", "success")
+        from core.database import create_scrape_session
+        session_id = create_scrape_session(
+            scrape_name=config["scrape_name"],
+            entity_type=config["entity_type"],
+            mode=config["mode"],
+            keywords=config["keywords"],
+            record_region=config["record_region"],
+            phone_region=config["phone_region"],
+            warning_excl=config["warning_exclusions"],
+            list_limit=config["list_limit"]
+        )
+        
+        import runtime
+        state = runtime.read_tool_state("scraper")
+        if state.get("status") not in ("running", "starting"):
+            import os, sys
+            cmd = [sys.executable, os.path.join("src", "scraper_daemon.py")]
+            proc, log = runtime.launch_tool("scraper", cmd)
+            _active_procs["scraper"] = proc
+            
+        flash(f"Scrape '{scrape_name}' queued (session #{session_id})", "success")
     except Exception as e:
-        flash(f"Failed to start scrape: {e}", "error")
+        flash(f"Failed to queue scrape: {e}", "error")
 
     return redirect(url_for("scraper_page"))
 
 
 @app.route("/scraper/stop", methods=["POST"])
 def scraper_stop():
-    """Stop the running scrape."""
-    from src.scraper_runner import request_stop, is_running
+    """Stop the running scraper daemon entirely."""
+    import runtime
+    runtime.write_tool_state("scraper", status="stopped_requested")
+    flash("Stop signal sent — scraper daemon will finish current contact then stop", "success")
+    return redirect(url_for("scraper_page"))
 
-    if is_running():
-        request_stop()
-        flash("Stop signal sent — scraper will finish current contact then stop", "success")
-    else:
-        flash("No scrape is running", "warning")
 
+@app.route("/scraper/pause/<int:session_id>", methods=["POST"])
+def scraper_pause(session_id):
+    from core.database import update_scrape_session
+    update_scrape_session(session_id, status="paused")
+    flash(f"Session #{session_id} paused.", "success")
+    return redirect(url_for("scraper_page"))
+
+
+@app.route("/scraper/resume/<int:session_id>", methods=["POST"])
+def scraper_resume(session_id):
+    from core.database import update_scrape_session
+    update_scrape_session(session_id, status="queued")
+    
+    import runtime
+    state = runtime.read_tool_state("scraper")
+    if state.get("status") not in ("running", "starting"):
+        cmd = [sys.executable, os.path.join("src", "scraper_daemon.py")]
+        proc, log = runtime.launch_tool("scraper", cmd)
+        _active_procs["scraper"] = proc
+        
+    flash(f"Session #{session_id} resumed.", "success")
     return redirect(url_for("scraper_page"))
 
 
 @app.route("/scraper/mfa", methods=["POST"])
 def scraper_mfa():
     """Submit MFA code to the running scraper."""
-    from src.scraper_runner import submit_mfa_from_web
-
     code = request.form.get("mfa_code", "").strip()
     if not code:
         flash("MFA code required", "error")
     else:
-        submit_mfa_from_web(code)
+        import runtime
+        runtime.write_tool_state("scraper", mfa_code=code)
         flash("MFA code submitted — verifying...", "success")
 
     return redirect(url_for("scraper_page"))

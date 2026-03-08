@@ -4,13 +4,14 @@
 
 {% block content %}
 
-{# ─── Active scrape: live feed / MFA prompt ─────────────────────────────── #}
-{% if session and session.status in ('running', 'mfa_required') %}
+{# ─── Active scrape: live feed / MFA prompt / Pause ────────────────────────── #}
+{% if session and session.status in ('running', 'mfa_required', 'queued', 'paused') %}
 
 <div class="metrics-grid animate-in" style="margin-bottom:24px;">
     <div class="metric-card">
         <div class="metric-label">Status</div>
-        <div class="metric-value {% if session.status == 'running' %}green{% elif session.status == 'mfa_required' %}yellow{% endif %}" style="font-size:18px; letter-spacing:1px;">
+        <div class="metric-value {% if session.status == 'running' %}green{% elif session.status in ('mfa_required', 'paused') %}yellow{% elif session.status == 'queued' %}text-muted{% endif %}"
+            style="font-size:18px; letter-spacing:1px;">
             {{ session.status|upper }}
         </div>
     </div>
@@ -28,7 +29,8 @@
     </div>
     <div class="metric-card" style="grid-column: span 2;">
         <div class="metric-label">Current Record</div>
-        <div style="font-size:12px; color:var(--text-secondary); margin-top:10px; font-family:'JetBrains Mono',monospace; line-height:1.4;" id="stat-record">
+        <div style="font-size:12px; color:var(--text-secondary); margin-top:10px; font-family:'JetBrains Mono',monospace; line-height:1.4;"
+            id="stat-record">
             {{ session.current_record or 'Waiting for next record...' }}
         </div>
     </div>
@@ -36,16 +38,19 @@
 
 {# MFA prompt #}
 {% if session.status == 'mfa_required' %}
-<div class="card animate-in" style="border-color:var(--yellow); border-width:2px; background:rgba(245,158,11,0.03); margin-bottom:24px; box-shadow:0 0 40px rgba(245,158,11,0.05);">
+<div class="card animate-in"
+    style="border-color:var(--yellow); border-width:2px; background:rgba(245,158,11,0.03); margin-bottom:24px; box-shadow:0 0 40px rgba(245,158,11,0.05);">
     <div class="card-title text-yellow" style="display:flex; align-items:center; gap:8px;">
         <span>🔐</span> MFA Verification Required
     </div>
     <p style="font-size:13px; color:var(--text-secondary); margin-bottom:16px; line-height:1.5;">
-        The scraper has reached the Salesforce login gate. Please check your authenticator app and enter the 6-digit code below to proceed.
+        The scraper has reached the Salesforce login gate. Please check your authenticator app and enter the 6-digit
+        code below to proceed.
     </p>
     <form action="/scraper/mfa" method="post" style="display:flex; gap:12px; align-items:center;">
         <input type="text" name="mfa_code" placeholder="000000" class="form-input"
-               style="width:160px; font-size:24px; font-weight:800; letter-spacing:6px; text-align:center; font-family:'JetBrains Mono',monospace;" autofocus required>
+            style="width:160px; font-size:24px; font-weight:800; letter-spacing:6px; text-align:center; font-family:'JetBrains Mono',monospace;"
+            autofocus required>
         <button type="submit" class="btn btn-primary" style="padding:12px 24px;">Authorize Scraper</button>
     </form>
 </div>
@@ -54,12 +59,23 @@
 {# Global Actions #}
 <div class="section-header animate-in" style="margin-bottom:16px; animation-delay:100ms;">
     <div style="display:flex; gap:12px; align-items:center;">
+        {% if session.status == 'paused' %}
+        <form action="/scraper/resume/{{ session.id }}" method="post">
+            <button type="submit" class="btn btn-success btn-sm">▶️ Resume Mission</button>
+        </form>
+        {% elif session.status in ('running', 'queued') %}
+        <form action="/scraper/pause/{{ session.id }}" method="post">
+            <button type="submit" class="btn btn-warning btn-sm">⏸ Pause Mission</button>
+        </form>
+        {% endif %}
         <form action="/scraper/stop" method="post">
-            <button type="submit" class="btn btn-danger btn-sm">⏹ Emergency Stop</button>
+            <button type="submit" class="btn btn-danger btn-sm"
+                onclick="return confirm('Kill the scraper daemon entirely? This affects all sessions.');">⏹ Emergency
+                Stop</button>
         </form>
         <div style="font-size:12px; color:var(--text-muted); font-weight:500;">
-            <span class="text-accent">{{ session.scrape_name }}</span> 
-            <span style="margin:0 8px; opacity:0.3;">/</span> 
+            <span class="text-accent">{{ session.scrape_name }}</span>
+            <span style="margin:0 8px; opacity:0.3;">/</span>
             {{ session.mode|upper }} MODE
         </div>
     </div>
@@ -70,9 +86,12 @@
 
 {# Live feed #}
 <div class="card animate-in" style="padding:0; overflow:hidden; animation-delay:150ms;">
-    <div style="padding:16px 20px; border-bottom:1px solid var(--border-strong); display:flex; justify-content:space-between; align-items:center; background:rgba(99,102,241,0.03);">
+    <div
+        style="padding:16px 20px; border-bottom:1px solid var(--border-strong); display:flex; justify-content:space-between; align-items:center; background:rgba(99,102,241,0.03);">
         <div class="card-title mb-0" style="display:flex; align-items:center; gap:10px;">
-            <div style="width:8px; height:8px; border-radius:50%; background:var(--green); animation:statusPulse 2s infinite;"></div>
+            <div
+                style="width:8px; height:8px; border-radius:50%; background:var(--green); animation:statusPulse 2s infinite;">
+            </div>
             Live Activity Stream
         </div>
         <span class="badge badge-muted" id="feed-count">{{ events|length }} EVENTS</span>
@@ -94,30 +113,31 @@
                 <tr class="feed-row feed-{{ e.event_type }}">
                     <td>
                         {% if e.event_type == 'saved' %}
-                            <span class="badge badge-green">SAVED</span>
+                        <span class="badge badge-green">SAVED</span>
                         {% elif e.event_type == 'skipped' %}
-                            <span class="badge badge-muted">SKIPPED</span>
+                        <span class="badge badge-muted">SKIPPED</span>
                         {% elif e.event_type == 'sponsor' %}
-                            <span class="badge badge-yellow">SPONSOR</span>
+                        <span class="badge badge-yellow">SPONSOR</span>
                         {% elif e.event_type == 'non_delegate' %}
-                            <span class="badge badge-yellow">NON-DEL</span>
+                        <span class="badge badge-yellow">NON-DEL</span>
                         {% elif e.event_type == 'warning_skip' %}
-                            <span class="badge badge-red">WARN</span>
+                        <span class="badge badge-red">WARN</span>
                         {% elif e.event_type == 'error' %}
-                            <span class="badge badge-red">ERROR</span>
+                        <span class="badge badge-red">ERROR</span>
                         {% elif e.event_type == 'status' %}
-                            <span class="badge badge-blue">INFO</span>
+                        <span class="badge badge-blue">INFO</span>
                         {% elif e.event_type == 'record_start' %}
-                            <span class="badge badge-accent">START</span>
+                        <span class="badge badge-accent">START</span>
                         {% else %}
-                            <span class="badge badge-muted">{{ e.event_type|upper }}</span>
+                        <span class="badge badge-muted">{{ e.event_type|upper }}</span>
                         {% endif %}
                     </td>
                     <td><strong>{{ e.first_name }} {{ e.last_name }}</strong></td>
                     <td class="text-accent">{{ e.company or '—' }}</td>
                     <td class="text-mono" style="font-size:11px;">{{ e.phone or e.email or '—' }}</td>
                     <td style="font-size:12px; color:var(--text-secondary); line-height:1.4;">{{ e.reason or '—' }}</td>
-                    <td style="font-size:10px; color:var(--text-dim); text-align:right;" class="text-mono">{{ e.created_at[-8:] if e.created_at else '—' }}</td>
+                    <td style="font-size:10px; color:var(--text-dim); text-align:right;" class="text-mono">{{
+                        e.created_at[-8:] if e.created_at else '—' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -127,8 +147,9 @@
 
 {# Auto-refresh script #}
 <script>
-(function() {
-    let lastId = {{ last_event_id }};
+    (function () {
+        let lastId = {{ last_event_id }
+    };
     const sessionId = {{ session.id }};
 
     function poll() {
@@ -141,7 +162,7 @@
                     document.getElementById('stat-skipped').textContent = data.session.skipped;
                     document.getElementById('stat-record').textContent = data.session.current_record || 'Waiting for next record...';
 
-                    if (data.session.status !== 'running' && data.session.status !== 'mfa_required') {
+                    if (!['running', 'mfa_required', 'queued', 'paused'].includes(data.session.status)) {
                         window.location.reload();
                         return;
                     }
@@ -181,20 +202,21 @@
                     document.getElementById('feed-count').textContent = `${tbody.children.length} EVENTS`;
                 }
             })
-            .catch(() => {});
+            .catch(() => { });
     }
 
     setInterval(poll, 2000);
-})();
+}) ();
 </script>
 
 {# ─── Completed/stopped scrape: search results ─────────────────────────── #}
-{% elif session and session.status in ('completed', 'stopped', 'error') %}
+{% elif session and session.status in ('completed', 'stopped', 'error', 'cancelled') %}
 
 <div class="metrics-grid animate-in" style="margin-bottom:24px;">
     <div class="metric-card">
         <div class="metric-label">Final Status</div>
-        <div class="metric-value {% if session.status == 'completed' %}green{% elif session.status == 'error' %}red{% else %}yellow{% endif %}" style="font-size:18px; letter-spacing:1px;">
+        <div class="metric-value {% if session.status == 'completed' %}green{% elif session.status == 'error' %}red{% else %}yellow{% endif %}"
+            style="font-size:18px; letter-spacing:1px;">
             {{ session.status|upper }}
         </div>
     </div>
@@ -223,7 +245,8 @@
 <div class="section-header animate-in" style="animation-delay:100ms;">
     <div class="search-bar">
         <form action="/scraper/{{ session.id }}" method="get" style="display:flex; gap:8px;">
-            <input type="text" name="q" value="{{ search }}" placeholder="Search name, company, title..." class="form-input">
+            <input type="text" name="q" value="{{ search }}" placeholder="Search name, company, title..."
+                class="form-input">
             <button type="submit" class="btn btn-primary btn-sm">Filter</button>
             {% if search %}
             <a href="/scraper/{{ session.id }}" class="btn btn-outline btn-sm">Reset</a>
@@ -254,25 +277,28 @@
                 <tr>
                     <td>
                         {% if e.event_type == 'saved' %}
-                            <span class="badge badge-green">VERIFIED</span>
+                        <span class="badge badge-green">VERIFIED</span>
                         {% else %}
-                            <span class="badge badge-muted">{{ e.event_type|upper }}</span>
+                        <span class="badge badge-muted">{{ e.event_type|upper }}</span>
                         {% endif %}
                     </td>
                     <td><strong>{{ e.first_name }} {{ e.last_name }}</strong></td>
                     <td class="text-accent">{{ e.company or '—' }}</td>
                     <td style="font-size:12px;">{{ e.title or '—' }}</td>
                     <td class="text-mono" style="font-size:11px;">{{ e.phone or e.email or '—' }}</td>
-                    <td style="font-size:11px; color:var(--text-muted); line-height:1.4;">{{ e.warnings or 'None' }}</td>
+                    <td style="font-size:11px; color:var(--text-muted); line-height:1.4;">{{ e.warnings or 'None' }}
+                    </td>
                 </tr>
                 {% endfor %}
                 {% if not results %}
-                <tr><td colspan="6">
-                    <div class="empty-state">
-                        <div class="empty-icon">🔍</div>
-                        <div class="empty-text">No records found matching your current filter</div>
-                    </div>
-                </td></tr>
+                <tr>
+                    <td colspan="6">
+                        <div class="empty-state">
+                            <div class="empty-icon">🔍</div>
+                            <div class="empty-text">No records found matching your current filter</div>
+                        </div>
+                    </td>
+                </tr>
                 {% endif %}
             </tbody>
         </table>
@@ -306,21 +332,26 @@
                     <td><strong>{{ s.scrape_name }}</strong></td>
                     <td>
                         {% if s.status == 'completed' %}
-                            <span class="badge badge-green">DONE</span>
+                        <span class="badge badge-green">DONE</span>
                         {% elif s.status == 'running' %}
-                            <span class="badge badge-blue">ACTIVE</span>
+                        <span class="badge badge-blue">ACTIVE</span>
+                        {% elif s.status == 'queued' %}
+                        <span class="badge badge-muted">QUEUED</span>
+                        {% elif s.status == 'paused' %}
+                        <span class="badge badge-yellow">PAUSED</span>
                         {% elif s.status == 'stopped' %}
-                            <span class="badge badge-yellow">HALTED</span>
+                        <span class="badge badge-yellow">HALTED</span>
                         {% elif s.status == 'error' %}
-                            <span class="badge badge-red">FAILED</span>
+                        <span class="badge badge-red">FAILED</span>
                         {% else %}
-                            <span class="badge badge-muted">{{ s.status|upper }}</span>
+                        <span class="badge badge-muted">{{ s.status|upper }}</span>
                         {% endif %}
                     </td>
                     <td><span class="badge badge-muted">{{ s.mode|upper }}</span></td>
                     <td><strong>{{ s.contacts_saved }}</strong> saved</td>
                     <td class="text-dim text-mono" style="font-size:11px;">{{ s.started_at }}</td>
-                    <td style="text-align:right;"><a href="/scraper/{{ s.id }}" class="btn btn-outline btn-xs">Review</a></td>
+                    <td style="text-align:right;"><a href="/scraper/{{ s.id }}"
+                            class="btn btn-outline btn-xs">Review</a></td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -410,7 +441,8 @@
         </div>
 
         <div style="display:flex; gap:12px; justify-content:flex-end; margin-top:24px;">
-            <button type="submit" class="btn btn-primary" style="padding:12px 36px; font-size:14px; letter-spacing:0.5px;">
+            <button type="submit" class="btn btn-primary"
+                style="padding:12px 36px; font-size:14px; letter-spacing:0.5px;">
                 LAUNCH MISSION
             </button>
         </div>
@@ -418,7 +450,7 @@
 </div>
 
 <script>
-    document.getElementById('mode-select').addEventListener('change', function() {
+    document.getElementById('mode-select').addEventListener('change', function () {
         const phoneGroup = document.getElementById('phone-region-group');
         phoneGroup.style.display = (this.value === 'mobile' || this.value === 'full') ? '' : 'none';
     });
@@ -427,14 +459,36 @@
 {% endif %}
 
 <style>
-    .feed-saved td { background: rgba(16,185,129,0.03); }
-    .feed-sponsor td { background: rgba(245,158,11,0.03); }
-    .feed-warning_skip td { background: rgba(239,68,68,0.03); }
-    .feed-error td { background: rgba(239,68,68,0.05); }
-    .feed-record_start td { border-top: 2px solid var(--border-strong); }
+    .feed-saved td {
+        background: rgba(16, 185, 129, 0.03);
+    }
 
-    #live-feed table { margin: 0; }
-    #live-feed td, #live-feed th { padding: 9px 12px; font-size: 12px; border-bottom: 1px solid var(--border); }
+    .feed-sponsor td {
+        background: rgba(245, 158, 11, 0.03);
+    }
+
+    .feed-warning_skip td {
+        background: rgba(239, 68, 68, 0.03);
+    }
+
+    .feed-error td {
+        background: rgba(239, 68, 68, 0.05);
+    }
+
+    .feed-record_start td {
+        border-top: 2px solid var(--border-strong);
+    }
+
+    #live-feed table {
+        margin: 0;
+    }
+
+    #live-feed td,
+    #live-feed th {
+        padding: 9px 12px;
+        font-size: 12px;
+        border-bottom: 1px solid var(--border);
+    }
 </style>
 
 {% endblock %}

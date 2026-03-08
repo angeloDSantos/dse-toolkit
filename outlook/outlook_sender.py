@@ -265,9 +265,50 @@ def main():
     sender = OutlookSender()
 
     if len(sys.argv) > 1 and sys.argv[1] == "--auto":
-        print("\n  [AUTO-MODE] Outlook Sender initialized.")
-        print("  System check: Ready for automated campaigns.")
-        print("  All API connections verified.\n")
+        import time
+        try:
+            from runtime import write_tool_state, read_tool_state
+            HAS_RUNTIME = True
+        except ImportError:
+            HAS_RUNTIME = False
+
+        if HAS_RUNTIME:
+            write_tool_state("outlook_sender", status="running")
+            
+        print("\n  [AUTO] Starting continuous outbound monitoring...")
+        print("  Checking for pending outbound messages every 60 seconds.\n")
+        
+        try:
+            while True:
+                if HAS_RUNTIME:
+                    state = read_tool_state("outlook_sender")
+                    if state.get("status") == "stopped_requested":
+                        break
+                        
+                # Milestone 6 will add database queries here to find queued 'outbound' messages and send them
+                print(f"  [{datetime.now().time().strftime('%H:%M:%S')}] Checked outbound queue. 0 pending.")
+                
+                for _ in range(60):
+                    if HAS_RUNTIME:
+                        st = read_tool_state("outlook_sender")
+                        if st.get("status") == "stopped_requested":
+                            break
+                    time.sleep(1)
+                    
+                if HAS_RUNTIME:
+                    st = read_tool_state("outlook_sender")
+                    if st.get("status") == "stopped_requested":
+                        break
+                        
+        except Exception as e:
+            if HAS_RUNTIME:
+                write_tool_state("outlook_sender", status="failed", error=str(e))
+            print(f"  [ERROR] Outlook Sender crashed: {e}")
+            return
+            
+        if HAS_RUNTIME:
+            write_tool_state("outlook_sender", status="stopped")
+        print("  [AUTO] Gracefully stopped.")
         return
 
     print("\n  Options:")

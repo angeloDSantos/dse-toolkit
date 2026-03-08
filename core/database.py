@@ -97,7 +97,8 @@ def init_db():
             classification  TEXT DEFAULT '',
             contact_name    TEXT DEFAULT '',
             contact_email   TEXT DEFAULT '',
-            contact_phone   TEXT DEFAULT ''
+            contact_phone   TEXT DEFAULT '',
+            provider_message_id TEXT UNIQUE
         );
         CREATE INDEX IF NOT EXISTS idx_outreach_contact ON outreach_log(contact_id);
         CREATE INDEX IF NOT EXISTS idx_outreach_channel ON outreach_log(channel);
@@ -132,7 +133,7 @@ def init_db():
             phone_region    TEXT DEFAULT 'all',
             warning_excl    TEXT DEFAULT '[]',
             list_limit      INTEGER DEFAULT 500,
-            status          TEXT DEFAULT 'running',
+            status          TEXT DEFAULT 'queued',
             contacts_saved  INTEGER DEFAULT 0,
             ddi_saved       INTEGER DEFAULT 0,
             orders_done     INTEGER DEFAULT 0,
@@ -140,6 +141,8 @@ def init_db():
             non_delegates   INTEGER DEFAULT 0,
             skipped         INTEGER DEFAULT 0,
             current_record  TEXT DEFAULT '',
+            current_entity_index INTEGER DEFAULT 0,
+            current_order_index  INTEGER DEFAULT 0,
             started_at      TEXT DEFAULT (datetime('now')),
             finished_at     TEXT DEFAULT ''
         );
@@ -258,13 +261,15 @@ def log_outreach(channel, direction, content, **kwargs):
     fields = ["channel", "direction", "content"]
     values = [channel, direction, content]
     for k in ("contact_id", "campaign_id", "status", "classification",
-              "contact_name", "contact_email", "contact_phone"):
+              "contact_name", "contact_email", "contact_phone", "provider_message_id", "timestamp"):
         if k in kwargs:
             fields.append(k)
             values.append(kwargs[k])
     placeholders = ", ".join("?" for _ in values)
     cols = ", ".join(fields)
-    db.execute(f"INSERT INTO outreach_log ({cols}) VALUES ({placeholders})", values)
+    
+    # Use INSERT OR IGNORE to handle duplicate provider_message_id safely based on UNIQUE constraint
+    db.execute(f"INSERT OR IGNORE INTO outreach_log ({cols}) VALUES ({placeholders})", values)
     db.commit()
 
 

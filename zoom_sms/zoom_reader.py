@@ -76,130 +76,8 @@ CONVO_LOAD_WAIT   = 1.4     # seconds to wait after clicking a conversation row
 MAX_SCREEN_CONVOS = 200     # maximum conversations to screen-scrape in one run
 
 
-# =============================================================================
-# CONVERSATIONS.DB  (local archive)
-# =============================================================================
-
-def _init_convo_db():
-    con = sqlite3.connect(CONVO_DB)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS conversations (
-            phone          TEXT PRIMARY KEY,
-            contact_name   TEXT,
-            last_message   TEXT,
-            direction      TEXT,
-            timestamp      TEXT,
-            classification TEXT DEFAULT 'UNKNOWN',
-            raw_thread     TEXT
-        )
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone     TEXT NOT NULL,
-            direction TEXT NOT NULL,
-            content   TEXT,
-            timestamp TEXT,
-            UNIQUE(phone, direction, content)
-        )
-    """)
-    con.commit()
-    con.close()
-
-
-def _save_convo_db(phone, contact_name, messages, classification="UNKNOWN"):
-    """Write a conversation to conversations.db."""
-    _init_convo_db()
-    con = sqlite3.connect(CONVO_DB)
-    try:
-        last = messages[-1] if messages else {}
-        con.execute("""
-            INSERT OR REPLACE INTO conversations
-            (phone, contact_name, last_message, direction, timestamp,
-             classification, raw_thread)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            phone, contact_name,
-            last.get("content", ""),
-            last.get("direction", ""),
-            last.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-            classification,
-            json.dumps(messages),
-        ))
-        for msg in messages:
-            try:
-                con.execute("""
-                    INSERT OR IGNORE INTO messages (phone, direction, content, timestamp)
-                    VALUES (?, ?, ?, ?)
-                """, (phone, msg.get("direction", ""),
-                      msg.get("content", ""), msg.get("timestamp", "")))
-            except Exception:
-                pass
-        con.commit()
-    finally:
-        con.close()
-
-
-def _load_all_convos() -> list:
-    _init_convo_db()
-    con = sqlite3.connect(CONVO_DB)
-    try:
-        rows = con.execute(
-            "SELECT phone, contact_name, last_message, direction, "
-            "timestamp, classification FROM conversations ORDER BY timestamp DESC"
-        ).fetchall()
-        return [
-            {"phone": r[0], "contact_name": r[1], "last_message": r[2],
-             "direction": r[3], "timestamp": r[4], "classification": r[5]}
-            for r in rows
-        ]
-    finally:
-        con.close()
-
-
-# =============================================================================
-# OUTREACH_LOG INTEGRATION
-# Writes to core.database so app.py Messages / Activity pages see results.
-# Silently skips when core.database is not available (standalone use).
-# =============================================================================
-
-def _write_outreach_log(phone, contact_name, messages, classification):
-    try:
-        project_root = os.path.dirname(BASE_DIR)
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-
-        from core.database import get_db, init_db
-        init_db()
-        db = get_db()
-
-        for msg in messages:
-            content   = msg.get("content", "").strip()
-            direction = msg.get("direction", "")
-            ts        = msg.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if not content:
-                continue
-
-            # Skip if already logged (dedup on phone + direction + message text)
-            existing = db.execute(
-                "SELECT id FROM outreach_log WHERE phone=? AND direction=? AND message=?",
-                (phone, direction, content)
-            ).fetchone()
-            if existing:
-                continue
-
-            # Only stamp classification on inbound messages
-            cls = classification if direction == "inbound" else ""
-            db.execute("""
-                INSERT INTO outreach_log
-                (phone, contact_name, channel, direction, message, classification, timestamp)
-                VALUES (?, ?, 'zoom_sms', ?, ?, ?, ?)
-            """, (phone, contact_name or "", direction, content, cls, ts))
-
-        db.commit()
-    except Exception as exc:
-        # Not fatal — local conversations.db is still written
-        print(f"  [outreach_log] Write skipped: {exc}")
+from zoom_sms.zoom_store import persist_conversation, load_stored_conversations
+from zoom_sms.zoom_runtime import log, set_status, heartbeat, mark_failed, mark_complete
 
 
 # =============================================================================
@@ -435,8 +313,7 @@ def scan_zoom_databases() -> dict:
             "message_count": len(msgs),
         }
 
-        _save_convo_db(phone, contact_name, msgs, classification)
-        _write_outreach_log(phone, contact_name, msgs, classification)
+        persist_conversation(phone, contact_name, msgs, classification, runtime_log=log)
 
     print(f"  [db] Saved {len(conversations)} conversations.")
     return conversations
@@ -733,8 +610,7 @@ def screen_scrape_all(max_convos: int = MAX_SCREEN_CONVOS) -> list:
             nmsg = len(parsed.get("messages", []))
             print(f"  [screen] [{i+1:>3}] {phone:<16} {name or '—':<15} "
                   f"{cls:<14} {nmsg} msgs")
-            _save_convo_db(phone, name, parsed["messages"], cls)
-            _write_outreach_log(phone, name, parsed["messages"], cls)
+            persist_conversation(phone, name, parsed["messages"], cls, runtime_log=log)
             results.append(parsed)
         elif not phone:
             print(f"  [screen] [{i+1:>3}] No phone number extracted — skipping.")
@@ -772,10 +648,11 @@ def read_current_conversation(auto: bool = False) -> dict:
 
     parsed = _parse_pane_text(raw)
     if parsed.get("phone"):
-        _save_convo_db(parsed["phone"], parsed["contact_name"],
-                       parsed["messages"], parsed["classification"])
-        _write_outreach_log(parsed["phone"], parsed["contact_name"],
-                            parsed["messages"], parsed["classification"])
+        persist_conversation(
+            parsed["phone"], parsed["contact_name"],
+            parsed["messages"], parsed["classification"],
+            runtime_log=log
+        )
     return parsed
 
 
@@ -894,10 +771,10 @@ class ZoomReader:
         return screen_scrape_all()
 
     def get_stored_conversations(self) -> list:
-        return _load_all_convos()
+        return load_stored_conversations()
 
     def get_replies_only(self) -> list:
-        return [c for c in _load_all_convos()
+        return [c for c in load_stored_conversations()
                 if c.get("direction") == "inbound" and c.get("last_message")]
 
 
@@ -929,14 +806,33 @@ def main():
     print("  ZOOM SMS READER")
     print("=" * 58)
 
-    reader = ZoomReader()
-
     # app.py launches with --auto — run full pipeline then exit
     if "--auto" in sys.argv:
-        print("\n  [AUTO] Full scan (DB + screen scrape)...")
-        results = reader.run_full_scan()
-        _print_table(results) if results else print("  No conversations found.\n")
+        set_status("starting")
+        
+        # Preflight checks
+        db_paths = _find_all_zoom_dbs()
+        if not db_paths and not HAS_GUI:
+            error_msg = "Preflight Failed: No Zoom DBs found and GUI automation not available."
+            log(error_msg)
+            mark_failed(error_msg)
+            return
+
+        set_status("scraping") # or running, map it to scraper
+        
+        try:
+            reader = ZoomReader()
+            log("[AUTO] Full scan (DB + screen scrape)...")
+            results = reader.run_full_scan()
+            _print_table(results) if results else log("No conversations found.")
+            set_status("stopped")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            mark_failed(f"Runtime error: {e}")
         return
+
+    reader = ZoomReader()
 
     print("\n  Options:")
     print("  1) Full scan — DB + screen (recommended)")

@@ -31,14 +31,23 @@
             Automated signal collection for Zoom SMS. Scans local databases and reads on-screen conversations to identify prospect interest and meeting requests.
         </div>
         <div class="tool-status">
-            {% if tool_status.get('zoom_sms') == 'running' %}
+            {% set st = tool_status.get('zoom_sms', {}) %}
+            {% if st.get('status') == 'starting' %}
+            <span class="badge badge-yellow">STARTING</span>
+            {% elif st.get('status') == 'waiting_for_user' %}
+            <span class="badge badge-blue">WAITING</span>
+            {% elif st.get('status') == 'running' %}
             <span class="badge badge-green">RUNNING</span>
+            {% elif st.get('status') == 'failed' %}
+            <span class="badge badge-red">FAILED</span>
+            <div style="font-size:11px; color:#ef4444; margin-top:4px;">{{ st.get('error', '') }}</div>
             {% else %}
             <span class="badge badge-muted">STOPPED</span>
             {% endif %}
         </div>
         <div class="tool-actions">
-            {% if tool_status.get('zoom_sms') == 'running' %}
+            {% set st = tool_status.get('zoom_sms', {}) %}
+            {% if st.get('status') in ['starting', 'waiting_for_user', 'running'] %}
             <form action="/outreach/stop/zoom_sms" method="post" style="width:100%;">
                 <button class="btn btn-danger btn-sm" style="width:100%;">Stop Module</button>
             </form>
@@ -57,14 +66,23 @@
             Classifies inbound email signals into strategic categories (Interested, Meeting, Opt-out). Extracts verified contact numbers from email signatures.
         </div>
         <div class="tool-status">
-            {% if tool_status.get('outlook_reader') == 'running' %}
+            {% set st = tool_status.get('outlook_reader', {}) %}
+            {% if st.get('status') == 'starting' %}
+            <span class="badge badge-yellow">STARTING</span>
+            {% elif st.get('status') == 'waiting_for_user' %}
+            <span class="badge badge-blue">WAITING</span>
+            {% elif st.get('status') == 'running' %}
             <span class="badge badge-green">RUNNING</span>
+            {% elif st.get('status') == 'failed' %}
+            <span class="badge badge-red">FAILED</span>
+            <div style="font-size:11px; color:#ef4444; margin-top:4px;">{{ st.get('error', '') }}</div>
             {% else %}
             <span class="badge badge-muted">STOPPED</span>
             {% endif %}
         </div>
         <div class="tool-actions">
-            {% if tool_status.get('outlook_reader') == 'running' %}
+            {% set st = tool_status.get('outlook_reader', {}) %}
+            {% if st.get('status') in ['starting', 'waiting_for_user', 'running'] %}
             <form action="/outreach/stop/outlook_reader" method="post" style="width:100%;">
                 <button class="btn btn-danger btn-sm" style="width:100%;">Stop Module</button>
             </form>
@@ -83,14 +101,23 @@
             High-volume communication module for templated emails and calendar orchestration. Supports manual review gates and variable-driven personalization.
         </div>
         <div class="tool-status">
-            {% if tool_status.get('outlook_sender') == 'running' %}
+            {% set st = tool_status.get('outlook_sender', {}) %}
+            {% if st.get('status') == 'starting' %}
+            <span class="badge badge-yellow">STARTING</span>
+            {% elif st.get('status') == 'waiting_for_user' %}
+            <span class="badge badge-blue">WAITING</span>
+            {% elif st.get('status') == 'running' %}
             <span class="badge badge-green">RUNNING</span>
+            {% elif st.get('status') == 'failed' %}
+            <span class="badge badge-red">FAILED</span>
+            <div style="font-size:11px; color:#ef4444; margin-top:4px;">{{ st.get('error', '') }}</div>
             {% else %}
             <span class="badge badge-muted">STOPPED</span>
             {% endif %}
         </div>
         <div class="tool-actions">
-            {% if tool_status.get('outlook_sender') == 'running' %}
+            {% set st = tool_status.get('outlook_sender', {}) %}
+            {% if st.get('status') in ['starting', 'waiting_for_user', 'running'] %}
             <form action="/outreach/stop/outlook_sender" method="post" style="width:100%;">
                 <button class="btn btn-danger btn-sm" style="width:100%;">Stop Module</button>
             </form>
@@ -106,7 +133,7 @@
 <div class="card animate-in" style="margin-top:28px; background:var(--bg-secondary); border:1px solid var(--border-color); animation-delay: 200ms;">
     <div style="padding:16px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
         <h3 style="margin:0; font-size:15px; font-weight:600; color:var(--text-primary);">
-            <i class="fas fa-terminal" style="margin-right:8px; color:var(--text-muted);"></i> Module Execution Logs
+            <i class="fas fa-terminal" style="margin-right:8px; color:var(--text-muted);"></i> Module Execution Logs <span id="log-file-path" style="font-size:11px; font-weight:normal; color:var(--text-muted); margin-left:10px;"></span>
         </h3>
         <select id="log-tool-selector" class="form-control" style="width:220px; padding:6px 10px; font-size:13px; height:auto; background:var(--bg-primary); color:var(--text-primary); border:1px solid var(--border-color);">
             <option value="zoom_sms">Zoom SMS Reader</option>
@@ -136,12 +163,15 @@
                 .then(data => {
                     const isScrolledToBottom = term.parentElement.scrollHeight - term.parentElement.clientHeight <= term.parentElement.scrollTop + 50;
                     
+                    const pathEl = document.getElementById('log-file-path');
+                    if (pathEl) {
+                        pathEl.textContent = data.log_path ? '📄 ' + data.log_path : '';
+                    }
+
                     if (data.logs && data.logs.length > 0) {
                         term.textContent = data.logs.join('\n');
                     } else {
-                        term.textContent = data.status === 'running' 
-                            ? 'Process is running. Waiting for output stream...' 
-                            : 'Process is currently STOPPED. No recent executed logs.';
+                        term.textContent = "Status: " + data.status.toUpperCase() + "\nWaiting for output stream...";
                     }
                     
                     // Auto-scroll if users were already at the bottom
