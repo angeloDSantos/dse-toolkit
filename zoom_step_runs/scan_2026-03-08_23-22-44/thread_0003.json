@@ -1,0 +1,22 @@
+{
+  "phone": "+12032141444",
+  "contact_name": "",
+  "messages": [
+    {
+      "sender": "+1 (203) 214-1444 Yesterday, 15:22",
+      "sender_phone": "+120321414441522",
+      "direction": "inbound",
+      "timestamp": "",
+      "date_section": "Yesterday",
+      "content": "aramadorai@yahoo.com"
+    }
+  ],
+  "our_message": "",
+  "our_message_time": "",
+  "their_response": "aramadorai@yahoo.com",
+  "their_response_time": "",
+  "classification": "UNKNOWN",
+  "last_reply": "aramadorai@yahoo.com",
+  "confidence": 0.7999999999999999,
+  "valid": true
+}

@@ -1,0 +1,22 @@
+{
+  "phone": "+18324981428",
+  "contact_name": "",
+  "messages": [
+    {
+      "sender": "+1 (832) 498-1428 Mar 6, 23:27",
+      "sender_phone": "+1832498142862327",
+      "direction": "inbound",
+      "timestamp": "",
+      "date_section": "Mar 6",
+      "content": "Hey there sorry I was traveling what's the date for this event?"
+    }
+  ],
+  "our_message": "",
+  "our_message_time": "",
+  "their_response": "Hey there sorry I was traveling what's the date for this event?",
+  "their_response_time": "",
+  "classification": "UNKNOWN",
+  "last_reply": "Hey there sorry I was traveling what's the date for this event?",
+  "confidence": 0.7999999999999999,
+  "valid": true
+}

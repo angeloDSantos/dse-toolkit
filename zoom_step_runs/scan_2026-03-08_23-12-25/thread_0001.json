@@ -1,0 +1,22 @@
+{
+  "phone": "+181239995972004",
+  "contact_name": "",
+  "messages": [
+    {
+      "sender": "+1 (812) 399-9597 20:04",
+      "sender_phone": "+181239995972004",
+      "direction": "inbound",
+      "timestamp": "",
+      "date_section": "Today",
+      "content": "Wow, this sounds exciting!  I love the roundtables.  It where creativity and actionable items come to light but I am consulting right now and not working for a specific business."
+    }
+  ],
+  "our_message": "",
+  "our_message_time": "",
+  "their_response": "Wow, this sounds exciting!  I love the roundtables.  It where creativity and actionable items come to light but I am consulting right now and not working for a specific business.",
+  "their_response_time": "",
+  "classification": "UNKNOWN",
+  "last_reply": "Wow, this sounds exciting!  I love the roundtables.  It where creativity and actionable items come to light but I am consulting right now and not working for a specific business.",
+  "confidence": 0.7999999999999999,
+  "valid": true
+}

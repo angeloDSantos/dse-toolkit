@@ -140,25 +140,57 @@ def save_to_app_db(phone, contact_name, messages, classification):
     return stats
 
 
-def persist_conversation(phone, contact_name, messages, classification="UNKNOWN", runtime_log=None):
-    """Save to both archive and app DB, and optionally log the stats."""
-    if not messages:
-        return {}
-        
-    archive_stats = save_conversation_archive(phone, contact_name, messages, classification)
-    app_stats = save_to_app_db(phone, contact_name, messages, classification)
-    
-    merged = {**archive_stats, **app_stats}
-    
-    if runtime_log and (merged["app_rows_written"] > 0 or merged["archive_messages_written"] > 0):
-        runtime_log(
-            f"Persisted {phone} ({contact_name or 'Unknown'}): "
-            f"Archive={merged['archive_messages_written']} msgs, "
-            f"App={merged['app_rows_written']} rows, "
-            f"Dups={merged['duplicates_skipped']}"
-        )
-        
+def persist_conversation(
+    phone: str,
+    contact_name: str,
+    messages: list[dict],
+    classification: str = "UNKNOWN",
+) -> dict:
+    """
+    Unified persistence entrypoint.
+    Saves to local archive and main app DB, then returns merged stats.
+    """
+    archive_stats = save_conversation_archive(
+        phone=phone,
+        contact_name=contact_name,
+        messages=messages,
+        classification=classification,
+    )
+    app_stats = save_to_app_db(
+        phone=phone,
+        contact_name=contact_name,
+        messages=messages,
+        classification=classification,
+    )
+
+    merged = {}
+    merged.update(archive_stats)
+    merged.update(app_stats)
     return merged
+
+
+def persist_parsed_conversation(parsed: dict) -> dict:
+    """
+    Convenience wrapper for parsed conversation dictionaries.
+    """
+    phone = parsed.get("phone", "")
+    if not phone:
+        return {
+            "archive_conversation_written": False,
+            "archive_messages_written": 0,
+            "archive_duplicates_skipped": 0,
+            "app_db_available": False,
+            "app_rows_written": 0,
+            "app_duplicates_skipped": 0,
+            "app_errors": 0,
+        }
+
+    return persist_conversation(
+        phone=phone,
+        contact_name=parsed.get("contact_name", ""),
+        messages=parsed.get("messages", []) or [],
+        classification=parsed.get("classification", "UNKNOWN"),
+    )
 
 
 def load_stored_conversations() -> list:

@@ -1,0 +1,18 @@
+{
+  "preview_point": [
+    305,
+    236
+  ],
+  "scroll_anchor_point": [
+    443,
+    219
+  ],
+  "message_pane_point": [
+    900,
+    250
+  ],
+  "scroll_amount_per_step": -2,
+  "scroll_repeats_per_message": 2,
+  "settle_after_click": 0.8,
+  "settle_after_scroll": 0.5
+}

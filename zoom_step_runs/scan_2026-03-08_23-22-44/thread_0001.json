@@ -1,0 +1,22 @@
+{
+  "phone": "+16154763867",
+  "contact_name": "",
+  "messages": [
+    {
+      "sender": "+1 (615) 476-3867 Mar 6, 19:10",
+      "sender_phone": "+1615476386761910",
+      "direction": "inbound",
+      "timestamp": "",
+      "date_section": "Mar 6",
+      "content": "Hi Ben, when is it?"
+    }
+  ],
+  "our_message": "",
+  "our_message_time": "",
+  "their_response": "Hi Ben, when is it?",
+  "their_response_time": "",
+  "classification": "UNKNOWN",
+  "last_reply": "Hi Ben, when is it?",
+  "confidence": 0.7999999999999999,
+  "valid": true
+}

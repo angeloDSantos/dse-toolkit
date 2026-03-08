@@ -1,0 +1,22 @@
+{
+  "phone": "+14695970959",
+  "contact_name": "",
+  "messages": [
+    {
+      "sender": "+1 (469) 597-0959 Mar 6, 21:50",
+      "sender_phone": "+1469597095962150",
+      "direction": "inbound",
+      "timestamp": "",
+      "date_section": "Mar 6",
+      "content": "Which location You Mar 6, 23:36 This would be our AI leadership summit in Dallas 27-29th April. How does that look for you?"
+    }
+  ],
+  "our_message": "",
+  "our_message_time": "",
+  "their_response": "Which location You Mar 6, 23:36 This would be our AI leadership summit in Dallas 27-29th April. How does that look for you?",
+  "their_response_time": "",
+  "classification": "UNKNOWN",
+  "last_reply": "Which location You Mar 6, 23:36 This would be our AI leadership summit in Dallas 27-29th April. How does that look for you?",
+  "confidence": 0.7999999999999999,
+  "valid": true
+}
