@@ -1024,6 +1024,11 @@ def main():
 
     # app.py launches with --auto - run full pipeline then exit
     if "--auto" in sys.argv:
+        if "--prompt-config" in sys.argv:
+            ans = input("\n  Do you want to recalibrate the Zoom window? (y/N): ").strip().lower()
+            if ans == 'y':
+                run_calibration_wizard()
+
         set_status("starting")
         
         # Preflight checks

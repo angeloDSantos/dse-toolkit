@@ -1,0 +1,133 @@
+{% extends "layout.html" %}
+
+{% block title %}Deals | Imperium{% endblock %}
+{% block page_title %}Deals Dashboard{% endblock %}
+
+{% block content %}
+<div class="analytics-grid" style="margin-bottom: 2rem;">
+    <div class="stat-card">
+        <div class="stat-title">Total Pipelines</div>
+        <div class="stat-value" style="color: var(--text);">{{ stats.get("Total", 0) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Booked 🤝</div>
+        <div class="stat-value" style="color: var(--success);">{{ stats.get("Booked", 0) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Awaiting FP 📥</div>
+        <div class="stat-value" style="color: var(--info);">{{ stats.get("Awaiting FP", 0) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Awaiting Callback ⏳</div>
+        <div class="stat-value" style="color: var(--warning);">{{ stats.get("Awaiting Callback", 0) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Missed FP ⚠️</div>
+        <div class="stat-value" style="color: var(--danger);">{{ stats.get("Missed FP", 0) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Missed Callback 🚫</div>
+        <div class="stat-value" style="color: var(--danger);">{{ stats.get("Missed Callback", 0) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">Dropped 🗑️</div>
+        <div class="stat-value" style="color: var(--muted);">{{ stats.get("Dropped", 0) }}</div>
+    </div>
+</div>
+
+<div class="card p-lg mb-lg">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <h2 style="margin: 0;">Deal Tracker</h2>
+
+        <div style="display: flex; gap: 1rem;">
+            <select class="input input-sm"
+                onchange="window.location.href='/deals?summit=' + this.value + '&stage={{ current_stage }}'">
+                <option value="all" {% if current_summit=='all' %}selected{% endif %}>All Summits</option>
+                {% for sum in summits %}
+                <option value="{{ sum }}" {% if current_summit==sum %}selected{% endif %}>{{ sum }}</option>
+                {% endfor %}
+            </select>
+
+            <select class="input input-sm"
+                onchange="window.location.href='/deals?summit={{ current_summit }}&stage=' + this.value">
+                <option value="all" {% if current_stage=='all' %}selected{% endif %}>All Stages</option>
+                <option value="Awaiting FP" {% if current_stage=='Awaiting FP' %}selected{% endif %}>Awaiting FP
+                </option>
+                <option value="Awaiting Callback" {% if current_stage=='Awaiting Callback' %}selected{% endif %}>
+                    Awaiting Callback</option>
+                <option value="Missed FP" {% if current_stage=='Missed FP' %}selected{% endif %}>Missed FP</option>
+                <option value="Missed Callback" {% if current_stage=='Missed Callback' %}selected{% endif %}>Missed
+                    Callback</option>
+                <option value="Booked" {% if current_stage=='Booked' %}selected{% endif %}>Booked</option>
+                <option value="Dropped" {% if current_stage=='Dropped' %}selected{% endif %}>Dropped</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Contact</th>
+                    <th>Company</th>
+                    <th>Summit</th>
+                    <th>Stage</th>
+                    <th>Future Call</th>
+                    <th>Reason / Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in deals %}
+                <tr>
+                    <td>
+                        <div style="font-weight: 500;">
+                            <a href="/contacts/{{ d.contact_id }}" style="color: inherit; text-decoration: none;">
+                                {{ d.first_name }} {{ d.last_name }}
+                            </a>
+                        </div>
+                        <div style="font-size: 0.8em; color: var(--muted);">{{ d.title }}</div>
+                        <div style="font-size: 0.8em; margin-top: 2px;">
+                            {% if d.email %}<a href="mailto:{{ d.email }}" style="color: var(--primary);">📧 Email</a>{%
+                            endif %}
+                            {% if d.phone %}&bull; <span style="color: var(--info);">📞 {{ d.phone }}</span>{% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <div class="badge badge-secondary" style="font-size: 0.8em;">{{ d.company }}</div>
+                    </td>
+                    <td>
+                        <div class="badge badge-outline">{{ d.summit }}</div>
+                    </td>
+                    <td>
+                        {% if d.stage == 'Booked' %}
+                        <div class="badge badge-success">🤝 Booked</div>
+                        {% elif d.stage == 'Awaiting FP' %}
+                        <div class="badge badge-info">📥 Awaiting FP</div>
+                        {% elif d.stage == 'Awaiting Callback' %}
+                        <div class="badge badge-warning">⏳ Awaiting Callback</div>
+                        {% elif d.stage == 'Dropped' %}
+                        <div class="badge" style="background: var(--muted); color: #fff;">🗑️ Dropped</div>
+                        {% else %}
+                        <div class="badge badge-danger">⚠️ {{ d.stage }}</div>
+                        {% endif %}
+                    </td>
+                    <td style="color: var(--muted); font-size: 0.9em;">
+                        {{ d.future_call_date if d.future_call_date else '—' }}
+                    </td>
+                    <td style="font-size: 0.9em; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                        title="{{ d.reason }}">
+                        {{ d.reason if d.reason else '—' }}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" style="text-align: center; color: var(--muted); padding: 3rem;">
+                        No deals match the selected filters.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

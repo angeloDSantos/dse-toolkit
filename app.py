@@ -31,7 +31,7 @@ from core.database import (
     get_summit_configs, save_summit_config, get_summit_config,
     get_summit_config_by_id, update_summit_config, delete_summit_config,
     get_scrape_sessions, get_scrape_session, get_scrape_events,
-    search_scrape_events,
+    search_scrape_events, get_deals, get_deal_stats
 )
 
 app = Flask(
@@ -121,16 +121,35 @@ def contacts():
                            page=page, total=total, per_page=per_page)
 
 
+@app.route("/contacts/<int:cid>")
+def contact_detail(cid):
+    from core.database import get_contact_by_id, get_recent_messages_for_contact
+    contact = get_contact_by_id(cid)
+    if not contact:
+        flash("Contact not found.", "error")
+        return redirect(url_for("contacts"))
+        
+    messages = get_recent_messages_for_contact(cid)
+    return render_template("contact_detail.html", contact=contact, messages=messages)
+
+
 @app.route("/contacts/import", methods=["POST"])
 def import_contacts():
-    file = request.files.get("csv_file")
-    if not file or not file.filename.endswith(".csv"):
-        flash("Please upload a .csv file", "error")
+    files = request.files.getlist("csv_file")
+    if not files or not files[0].filename:
+        flash("Please upload at least one .csv file", "error")
         return redirect(url_for("contacts"))
 
-    content = file.stream.read().decode("utf-8-sig")
-    count = _import_csv_content(content, source=file.filename)
-    flash(f"Imported {count} contacts from {file.filename}", "success")
+    total = 0
+    file_count = 0
+    for file in files:
+        if file.filename.endswith(".csv"):
+            content = file.stream.read().decode("utf-8-sig")
+            count = _import_csv_content(content, source=file.filename)
+            total += count
+            file_count += 1
+            
+    flash(f"Imported {total} contacts from {file_count} file(s)", "success")
     return redirect(url_for("contacts"))
 
 
@@ -337,6 +356,30 @@ def create_campaign():
     return redirect(url_for("campaigns"))
 
 
+# ─── Deals ───────────────────────────────────────────────────────────────────
+
+@app.route("/deals")
+def deals():
+    summit_filter = request.args.get("summit", "all")
+    stage_filter = request.args.get("stage", "all")
+    
+    rows = get_deals(summit_filter=summit_filter, stage_filter=stage_filter)
+    stats = get_deal_stats(summit_filter=summit_filter)
+    
+    # Simple list of available summits for the dropdown filter
+    db = get_db()
+    summit_names = [r[0] for r in db.execute("SELECT DISTINCT summit FROM deals ORDER BY summit").fetchall()]
+    
+    return render_template(
+        "deals.html",
+        deals=rows,
+        stats=stats,
+        summits=summit_names,
+        current_summit=summit_filter,
+        current_stage=stage_filter
+    )
+
+
 # ─── Outreach ────────────────────────────────────────────────────────────────
 
 @app.route("/outreach")
@@ -367,35 +410,57 @@ def launch_tool(tool):
         flash(f"Unknown tool: {tool}", "error")
         return redirect(url_for("outreach"))
 
+    import platform
+    import subprocess
     script = scripts[tool]
     with _process_lock:
-        if tool in _active_procs and _active_procs[tool].poll() is None:
-            flash(f"{tool} is already running", "warning")
-            return redirect(url_for("outreach"))
+        state = runtime.read_tool_state(tool)
+        st = state.get("status", "stopped")
+        if st in ("running", "starting") and tool in _active_procs and _active_procs[tool].poll() is None:
+            # We don't block if they just want to open another terminal, but warn
+            pass
+
+        cwd = os.path.dirname(os.path.abspath(__file__))
 
         # --- ZOOM SMS Calibration Check ---
         if tool == "zoom_sms":
-            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zoom_reader_config.json")
+            config_path = os.path.join(cwd, "zoom_reader_config.json")
             if not os.path.exists(config_path):
-                # Start the interactive wizard in a new visible shell window
-                import subprocess
-                subprocess.Popen(
-                    f'start cmd /k "echo Zoom Setup Wizard && python zoom_sms/zoom_reader.py setup_wizard"',
-                    shell=True,
-                    cwd=os.path.dirname(os.path.abspath(__file__))
-                )
+                if platform.system() == "Darwin":
+                    osa = f'''tell application "Terminal" to do script "cd \\"{cwd}\\" && python zoom_sms/zoom_reader.py setup_wizard"'''
+                    subprocess.Popen(['osascript', '-e', osa])
+                else:
+                    subprocess.Popen(
+                        f'start cmd /k "echo Zoom Setup Wizard && python zoom_sms/zoom_reader.py setup_wizard"',
+                        shell=True,
+                        cwd=cwd
+                    )
                 flash("Zoom SMS needs calibration first! Please complete the setup in the new terminal window, then try launching again.", "warning")
                 return redirect(url_for("outreach"))
         # ----------------------------------
 
-        proc, _ = runtime.launch_tool(
-            tool,
-            ["python", script, "--auto"],
-            cwd=os.path.dirname(os.path.abspath(__file__))
-        )
-        _active_procs[tool] = proc
+        # Launch tools in a new terminal window
+        if tool == "scraper":
+            cmd_args = f'python {script}'
+        else:
+            cmd_args = f'python {script} --auto --prompt-config'
 
-    flash(f"{tool} launched in background", "success")
+        if platform.system() == "Darwin":
+            osa = f'''tell application "Terminal" to do script "cd \\"{cwd}\\" && {cmd_args}"'''
+            proc = subprocess.Popen(['osascript', '-e', osa])
+        else:
+            proc = subprocess.Popen(f'start cmd /k "{cmd_args}"', shell=True, cwd=cwd)
+
+        _active_procs[tool] = proc
+        
+        runtime.write_tool_state(
+            tool,
+            status="running",
+            log_path=os.path.join(runtime.LOG_DIR, f"{tool}_terminal.log"),
+            error=""
+        )
+
+    flash(f"{tool} launched in a new terminal window", "success")
     return redirect(url_for("outreach"))
 
 
@@ -418,10 +483,13 @@ def stop_tool(tool):
 @app.route("/replies")
 def messages():
     channel = request.args.get("channel", "")
+    classification = request.args.get("classification", "")
+    
     rows = get_outreach_log(
         channel=channel if channel else None,
         direction="inbound",
-        limit=100,
+        classification=classification if classification else None,
+        limit=200,
     )
     
     # Simple stats for the analytics grid
@@ -434,6 +502,7 @@ def messages():
         "messages.html", 
         messages_list=rows, 
         channel=channel,
+        classification=classification,
         total_messages=stats["total_replies"],
         interested_count=stats["interested"],
         stop_count=stats["stop"],
@@ -524,9 +593,17 @@ def api_tool_status():
             state = runtime.read_tool_state(name)
             st = state.get("status", "stopped")
             if st == "running":
-                if name not in _active_procs or _active_procs[name].poll() is not None:
-                    st = "failed"
-                    runtime.write_tool_state(name, status="failed", error="Process exited unexpectedly")
+                # With terminal launching, `_active_procs[name]` is just the osascript/cmd wrapper.
+                # It exits instantly. We rely on heartbeat updates from the tool instead.
+                last_updated_str = state.get("updated_at")
+                if last_updated_str:
+                    try:
+                        last_updated = datetime.fromisoformat(last_updated_str)
+                        if (datetime.now() - last_updated).total_seconds() > 300: # 5 min timeout
+                            st = "stopped"
+                            runtime.write_tool_state(name, status="stopped", error="Terminal closed or process timed out")
+                    except Exception:
+                        pass
             
             status[name] = st
     return jsonify(status)

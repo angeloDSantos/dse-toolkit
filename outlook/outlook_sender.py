@@ -264,7 +264,10 @@ def main():
 
     sender = OutlookSender()
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--auto":
+    if "--auto" in sys.argv:
+        if "--prompt-config" in sys.argv:
+            print("\n  No configuration required for Outlook Sender.\n")
+
         import time
         try:
             from runtime import write_tool_state, read_tool_state

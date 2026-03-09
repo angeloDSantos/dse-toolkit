@@ -32,11 +32,31 @@
 </div>
 
 <!-- Channel tabs -->
-<div class="channel-tabs">
-    <a href="/messages" class="channel-tab {% if not channel %}active{% endif %}">All Messages</a>
-    <a href="/messages?channel=outlook" class="channel-tab {% if channel == 'outlook' %}active{% endif %}">📧 Outlook</a>
-    <a href="/messages?channel=zoom_sms" class="channel-tab {% if channel == 'zoom_sms' %}active{% endif %}">📱 Zoom SMS</a>
-    <a href="/messages?channel=linkedin" class="channel-tab {% if channel == 'linkedin' %}active{% endif %}">💼 LinkedIn</a>
+<div class="channel-tabs" style="margin-bottom: 10px;">
+    <a href="/messages?classification={{ classification }}"
+        class="channel-tab {% if not channel %}active{% endif %}">All Messages</a>
+    <a href="/messages?channel=outlook&classification={{ classification }}"
+        class="channel-tab {% if channel == 'outlook' %}active{% endif %}">📧 Outlook</a>
+    <a href="/messages?channel=zoom_sms&classification={{ classification }}"
+        class="channel-tab {% if channel == 'zoom_sms' %}active{% endif %}">📱 Zoom SMS</a>
+    <a href="/messages?channel=linkedin&classification={{ classification }}"
+        class="channel-tab {% if channel == 'linkedin' %}active{% endif %}">💼 LinkedIn</a>
+</div>
+
+<!-- Classification tabs -->
+<div class="channel-tabs" style="margin-top: 0;">
+    <a href="/messages?channel={{ channel }}" class="channel-tab {% if not classification %}active{% endif %}">All
+        Status</a>
+    <a href="/messages?channel={{ channel }}&classification=INTERESTED,MORE_INFO,INTERESTED_REPLY"
+        class="channel-tab {% if 'INTERESTED' in (classification or '') %}active{% endif %}">Awaiting Reply /
+        Interested</a>
+    <a href="/messages?channel={{ channel }}&classification=MEETING_REQUEST,MEETING"
+        class="channel-tab {% if 'MEETING' in (classification or '') %}active{% endif %}">Meetings</a>
+    <a href="/messages?channel={{ channel }}&classification=FOLLOW_UP"
+        class="channel-tab {% if 'FOLLOW_UP' in (classification or '') %}active{% endif %}">Follow Up</a>
+    <a href="/messages?channel={{ channel }}&classification=NOT_INTERESTED,STOP"
+        class="channel-tab {% if 'NOT_INTERESTED' in (classification or '') or 'STOP' in (classification or '') %}active{% endif %}">Not
+        Interested / Stop</a>
 </div>
 
 <!-- Message cards -->
@@ -44,12 +64,14 @@
 <div class="messages-feed">
     {% for r in messages_list %}
     <div class="msg-card animate-in" style="animation-delay: {{ loop.index0 * 30 }}ms;">
-        <div class="msg-avatar {% if r.channel == 'outlook' %}outlook{% elif r.channel == 'zoom_sms' %}zoom{% else %}linkedin{% endif %}">
+        <div
+            class="msg-avatar {% if r.channel == 'outlook' %}outlook{% elif r.channel == 'zoom_sms' %}zoom{% else %}linkedin{% endif %}">
             {% if r.channel == 'outlook' %}📧{% elif r.channel == 'zoom_sms' %}📱{% else %}💼{% endif %}
         </div>
         <div class="msg-body">
             <div class="msg-header">
-                <span class="msg-sender">{{ r.contact_name or r.contact_email or r.contact_phone or 'Unknown Contact' }}</span>
+                <span class="msg-sender">{{ r.contact_name or r.contact_email or r.contact_phone or 'Unknown Contact'
+                    }}</span>
                 {% if r.classification == 'INTERESTED' %}
                 <span class="badge badge-green">Interested</span>
                 {% elif r.classification == 'NOT_INTERESTED' %}

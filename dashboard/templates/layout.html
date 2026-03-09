@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,6 +12,7 @@
         document.documentElement.setAttribute('data-theme', savedTheme);
     </script>
 </head>
+
 <body>
     <div class="noise-overlay"></div>
     <aside class="sidebar">
@@ -34,10 +36,14 @@
             <a href="/campaigns" class="nav-item {% if '/campaigns' in request.path %}active{% endif %}">
                 <span class="nav-icon">🎯</span> Campaigns
             </a>
+            <a href="/deals" class="nav-item {% if '/deals' in request.path %}active{% endif %}">
+                <span class="nav-icon">🤝</span> Deals
+            </a>
             <a href="/outreach" class="nav-item {% if '/outreach' in request.path %}active{% endif %}">
                 <span class="nav-icon">🚀</span> Outreach Tools
             </a>
-            <a href="/messages" class="nav-item {% if '/messages' in request.path or '/replies' in request.path %}active{% endif %}">
+            <a href="/messages"
+                class="nav-item {% if '/messages' in request.path or '/replies' in request.path %}active{% endif %}">
                 <span class="nav-icon">💬</span> Messages
             </a>
             <a href="/activity" class="nav-item {% if '/activity' in request.path %}active{% endif %}">
@@ -49,7 +55,9 @@
         </nav>
         <div class="sidebar-footer" style="display:flex; justify-content:space-between; align-items:center;">
             <div class="version">v2.0 — Local Mode</div>
-            <button id="theme-toggle" class="btn btn-outline btn-xs" style="padding: 4px 8px; font-size: 14px; line-height: 1; border-color: transparent;" title="Toggle Theme">
+            <button id="theme-toggle" class="btn btn-outline btn-xs"
+                style="padding: 4px 8px; font-size: 14px; line-height: 1; border-color: transparent;"
+                title="Toggle Theme">
                 <span id="theme-icon">🌙</span>
             </button>
         </div>
@@ -79,7 +87,7 @@
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const toggle = document.getElementById('theme-toggle');
-            if(toggle) {
+            if (toggle) {
                 const icon = document.getElementById('theme-icon');
                 icon.textContent = savedTheme === 'dark' ? '🌙' : '☀️';
                 toggle.addEventListener('click', () => {
@@ -93,4 +101,5 @@
         });
     </script>
 </body>
+
 </html>

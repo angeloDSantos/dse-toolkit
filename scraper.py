@@ -77,15 +77,30 @@ def _yn(prompt: str) -> bool:
 
 
 def _collect_keywords() -> list:
-    print("\n  Enter keywords (one per line). Blank line to finish.")
     keywords = []
+    
+    # Force at least one keyword
     while True:
-        raw = input("  keyword: ").strip()
-        if not raw:
+        first_kw = input("\n  Enter keyword (e.g., CMO Europe): ").strip()
+        if first_kw:
+            keywords.append(first_kw)
             break
-        keywords.append(raw)
-    if not keywords:
-        keywords = [input("  At least one keyword: ").strip()]
+        print("  At least one keyword is required.")
+        
+    # Ask for additional keywords
+    while True:
+        ans = input("  Add another keyword? (y/n / blank to finish): ").strip().lower()
+        if ans in ("n", "no", ""):
+            break
+        elif ans in ("y", "yes"):
+            kw = input("  Enter next keyword: ").strip()
+            if kw:
+                keywords.append(kw)
+        else:
+            # If they just typed another keyword instead of y/n, accept it as a keyword
+            if ans:
+                keywords.append(ans)
+                
     return keywords
 
 

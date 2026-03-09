@@ -1,0 +1,136 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ contact.first_name }} {{ contact.last_name }} — Imperium{% endblock %}
+{% block page_title %}Contact Profile{% endblock %}
+
+{% block content %}
+<div style="display: flex; gap: 2rem;">
+
+    <!-- Left Column: Contact Profile Card -->
+    <div style="flex: 1; max-width: 400px;">
+        <div class="card p-lg mb-lg">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <h2 style="margin: 0; font-size: 1.5rem;">{{ contact.first_name }} {{ contact.last_name }}</h2>
+                <a href="/contacts" class="btn btn-outline btn-xs" style="text-decoration: none;">← Back</a>
+            </div>
+            <p style="color: var(--muted); margin-top: 0.5rem; margin-bottom: 2rem;">{{ contact.title or 'Unknown Title'
+                }} @ <span style="color: var(--accent);">{{ contact.company or 'Unknown Company' }}</span></p>
+
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <div>
+                    <label
+                        style="font-size: 0.75rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px;">Email</label>
+                    <div class="text-mono" style="font-size: 0.9em; margin-top: 0.25rem;">
+                        {% if contact.email %}
+                        <a href="mailto:{{ contact.email }}" style="color: var(--primary); text-decoration: none;">{{
+                            contact.email }}</a>
+                        {% else %}
+                        <span style="color: var(--muted);">—</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div>
+                    <label
+                        style="font-size: 0.75rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px;">Phone</label>
+                    <div class="text-mono" style="font-size: 0.9em; margin-top: 0.25rem;">
+                        {% if contact.phone %}
+                        <span style="color: var(--info);">{{ contact.phone }}</span>
+                        {% else %}
+                        <span style="color: var(--muted);">—</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div>
+                    <label
+                        style="font-size: 0.75rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px;">LinkedIn</label>
+                    <div style="font-size: 0.9em; margin-top: 0.25rem;">
+                        {% if contact.linkedin_url %}
+                        <a href="{{ contact.linkedin_url }}" target="_blank"
+                            style="color: var(--primary); text-decoration: none;">View Profile ↗</a>
+                        {% else %}
+                        <span style="color: var(--muted);">—</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div>
+                    <label
+                        style="font-size: 0.75rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px;">Region
+                        & Industry</label>
+                    <div style="font-size: 0.9em; margin-top: 0.25rem;">
+                        <span class="badge badge-muted">{{ contact.region or 'Unknown Region' }}</span>
+                        <span class="badge badge-muted">{{ contact.industry or 'Unknown Industry' }}</span>
+                    </div>
+                </div>
+
+                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.05);">
+                    <form action="/contacts/delete/{{ contact.id }}" method="post"
+                        onsubmit="return confirm('Delete this contact?');">
+                        <button class="btn btn-outline btn-sm"
+                            style="color: var(--red); border-color: rgba(239, 68, 68, 0.2); width: 100%;">Delete
+                            Contact</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Column: Recent Messages Feed -->
+    <div style="flex: 2;">
+        <div class="card p-lg" style="height: 100%; min-height: 600px;">
+            <h3 style="margin-top: 0; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                💬 Communication History
+                <span class="badge badge-primary">{{ messages|length }}</span>
+            </h3>
+
+            {% if messages %}
+            <div class="messages-feed" style="max-height: 600px; overflow-y: auto; padding-right: 1rem;">
+                {% for msg in messages %}
+                <div class="msg-card animate-in"
+                    style="animation-delay: {{ loop.index0 * 30 }}ms; border-left: 2px solid {% if msg.direction == 'inbound' %}var(--success){% else %}var(--info){% endif %};">
+
+                    <div class="msg-avatar {% if msg.channel == 'outlook' %}outlook{% elif msg.channel == 'zoom_sms' %}zoom{% else %}linkedin{% endif %}"
+                        style="flex-shrink: 0;">
+                        {% if msg.channel == 'outlook' %}📧{% elif msg.channel == 'zoom_sms' %}📱{% else %}💼{% endif %}
+                    </div>
+
+                    <div class="msg-body" style="flex: 1;">
+                        <div class="msg-header" style="justify-content: space-between;">
+                            <div>
+                                <strong>{% if msg.direction == 'inbound' %}Incoming ({{ msg.channel }}){% else
+                                    %}Outgoing ({{ msg.channel }}){% endif %}</strong>
+                            </div>
+                            <div class="msg-time">{{ msg.timestamp }}</div>
+                        </div>
+
+                        {% if msg.classification %}
+                        <div style="margin-top: 4px; margin-bottom: 8px;">
+                            {% if msg.classification in ['INTERESTED', 'MEETING', 'MEETING_REQUEST'] %}
+                            <span class="badge badge-success" style="font-size: 0.7em;">{{ msg.classification }}</span>
+                            {% elif msg.classification in ['NOT_INTERESTED', 'STOP'] %}
+                            <span class="badge badge-danger" style="font-size: 0.7em;">{{ msg.classification }}</span>
+                            {% else %}
+                            <span class="badge badge-secondary" style="font-size: 0.7em;">{{ msg.classification
+                                }}</span>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+
+                        <div class="msg-snippet" style="white-space: pre-wrap; font-size: 0.9em; color: var(--text);">{{
+                            msg.content }}</div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state" style="margin-top: 4rem;">
+                <div class="empty-icon">📭</div>
+                <div class="empty-text">No outreach history or messages recorded for this contact yet.</div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

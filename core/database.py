@@ -167,6 +167,22 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_scrape_events_session
             ON scrape_events(session_id);
+
+        -- Deals (Sales opportunities linked to contacts)
+        CREATE TABLE IF NOT EXISTS deals (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            contact_id          INTEGER NOT NULL REFERENCES contacts(id),
+            summit              TEXT NOT NULL DEFAULT '',
+            stage               TEXT NOT NULL DEFAULT 'Awaiting FP',
+            grading             TEXT DEFAULT '',
+            future_call_date    TEXT DEFAULT '',
+            reason              TEXT DEFAULT '',
+            created_at          TEXT DEFAULT (datetime('now')),
+            updated_at          TEXT DEFAULT (datetime('now')),
+            UNIQUE(contact_id, summit)
+        );
+        CREATE INDEX IF NOT EXISTS idx_deals_contact ON deals(contact_id);
+        CREATE INDEX IF NOT EXISTS idx_deals_summit ON deals(summit);
     """)
     db.commit()
 
@@ -223,6 +239,20 @@ def delete_contact(contact_id):
     db.commit()
 
 
+def get_contact_by_id(contact_id):
+    db = get_db()
+    return db.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,)).fetchone()
+
+
+def get_recent_messages_for_contact(contact_id, limit=50):
+    db = get_db()
+    return db.execute("""
+        SELECT * FROM outreach_log 
+        WHERE contact_id = ? 
+        ORDER BY timestamp DESC LIMIT ?
+    """, (contact_id, limit)).fetchall()
+
+
 # ─── Campaign helpers ────────────────────────────────────────────────────────
 
 def add_campaign(name, **kwargs):
@@ -258,6 +288,38 @@ def add_contact_to_campaign(campaign_id, contact_id):
 
 def log_outreach(channel, direction, content, **kwargs):
     db = get_db()
+    
+    # Auto-link or create a Contact record for inbound messages missing an ID
+    contact_id = kwargs.get("contact_id")
+    if not contact_id and direction == 'inbound':
+        contact_phone = kwargs.get("contact_phone", "")
+        contact_email = kwargs.get("contact_email", "")
+        contact_name = kwargs.get("contact_name", "")
+        
+        found_id = None
+        if contact_email:
+            row = db.execute("SELECT id FROM contacts WHERE email = ?", (contact_email,)).fetchone()
+            if row: found_id = row[0]
+        if not found_id and contact_phone:
+            row = db.execute("SELECT id FROM contacts WHERE phone = ?", (contact_phone,)).fetchone()
+            if row: found_id = row[0]
+            
+        if found_id:
+            kwargs["contact_id"] = found_id
+        elif contact_email or contact_phone:
+            # Mint a brand new contact
+            parts = contact_name.split(" ", 1)
+            fn = parts[0] if parts and parts[0].strip() else "Unknown"
+            ln = parts[1] if len(parts) > 1 else ""
+            try:
+                db.execute(
+                    "INSERT INTO contacts (first_name, last_name, company, email, phone, source, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (fn, ln, "Unknown", contact_email, contact_phone, f"Inbound {channel}", "new")
+                )
+                kwargs["contact_id"] = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            except Exception:
+                pass
+
     fields = ["channel", "direction", "content"]
     values = [channel, direction, content]
     for k in ("contact_id", "campaign_id", "status", "classification",
@@ -273,7 +335,7 @@ def log_outreach(channel, direction, content, **kwargs):
     db.commit()
 
 
-def get_outreach_log(channel=None, direction=None, limit=100):
+def get_outreach_log(channel=None, direction=None, classification=None, limit=100):
     db = get_db()
     where = ["content NOT LIKE 'DNC %'"]
     params = []
@@ -283,6 +345,17 @@ def get_outreach_log(channel=None, direction=None, limit=100):
     if direction:
         where.append("direction = ?")
         params.append(direction)
+    if classification:
+        # If we pass multiple classifications comma separated, handle IN clause
+        if ',' in classification:
+            classes = [c.strip() for c in classification.split(',')]
+            placeholders = ','.join(['?']*len(classes))
+            where.append(f"classification IN ({placeholders})")
+            params.extend(classes)
+        else:
+            where.append("classification = ?")
+            params.append(classification)
+            
     clause = " WHERE " + " AND ".join(where)
     params.append(limit)
     return db.execute(
@@ -443,3 +516,98 @@ def search_scrape_events(session_id, query="", event_type="saved"):
         "ORDER BY id DESC",
         (session_id, event_type)
     ).fetchall()
+
+
+# ─── Deals helpers ─────────────────────────────────────────────────────────
+
+def add_deal(contact_id, summit, stage="Awaiting FP", grading="", future_call_date="", reason=""):
+    db = get_db()
+    
+    # Check if a deal already exists for this contact + summit
+    existing = db.execute("SELECT id FROM deals WHERE contact_id = ? AND summit = ?", (contact_id, summit)).fetchone()
+    
+    if existing:
+        # Update existing
+        db.execute(
+            "UPDATE deals SET stage = ?, grading = ?, future_call_date = ?, reason = ?, updated_at = datetime('now') WHERE id = ?",
+            (stage, grading, future_call_date, reason, existing[0])
+        )
+    else:
+        # Insert new
+        db.execute(
+            "INSERT INTO deals (contact_id, summit, stage, grading, future_call_date, reason) VALUES (?, ?, ?, ?, ?, ?)",
+            (contact_id, summit, stage, grading, future_call_date, reason)
+        )
+    
+    db.commit()
+
+
+def update_deal_stage(deal_id, new_stage):
+    db = get_db()
+    db.execute(
+        "UPDATE deals SET stage = ?, updated_at = datetime('now') WHERE id = ?",
+        (new_stage, deal_id)
+    )
+    db.commit()
+
+
+def get_deals(summit_filter=None, stage_filter=None, limit=200):
+    db = get_db()
+    query = """
+        SELECT d.*, c.first_name, c.last_name, c.company, c.title, c.email, c.phone 
+        FROM deals d
+        LEFT JOIN contacts c ON d.contact_id = c.id
+    """
+    
+    where = []
+    params = []
+    
+    if summit_filter and summit_filter.lower() != "all":
+        where.append("d.summit = ?")
+        params.append(summit_filter)
+        
+    if stage_filter and stage_filter.lower() != "all":
+        where.append("d.stage = ?")
+        params.append(stage_filter)
+        
+    if where:
+        query += " WHERE " + " AND ".join(where)
+        
+    query += " ORDER BY d.updated_at DESC LIMIT ?"
+    params.append(limit)
+    
+    return db.execute(query, params).fetchall()
+
+
+def get_deal_stats(summit_filter=None):
+    db = get_db()
+    
+    base_query = "SELECT stage, COUNT(*) FROM deals"
+    params = []
+    
+    if summit_filter and summit_filter.lower() != "all":
+        base_query += " WHERE summit = ?"
+        params.append(summit_filter)
+        
+    base_query += " GROUP BY stage"
+    
+    rows = db.execute(base_query, params).fetchall()
+    stats = {
+        "Awaiting FP": 0,
+        "Awaiting Callback": 0,
+        "Missed FP": 0,
+        "Missed Callback": 0,
+        "Booked": 0,
+        "Dropped": 0,
+        "Total": 0
+    }
+    
+    for row in rows:
+        stage = row[0]
+        cnt = row[1]
+        
+        if stage in stats:
+            stats[stage] += cnt
+        stats["Total"] += cnt
+        
+    return stats

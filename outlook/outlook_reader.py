@@ -36,15 +36,28 @@ CHECKPOINT_PATH = Path("outlook_reader_checkpoint.json")
 
 def load_checkpoint() -> dict:
     if not CHECKPOINT_PATH.exists():
-        return {"processed_entry_ids": []}
+        return {"processed_entry_ids": [], "processed_fallback_keys": []}
     try:
         return json.loads(CHECKPOINT_PATH.read_text(encoding="utf-8"))
     except Exception:
-        return {"processed_entry_ids": []}
+        return {"processed_entry_ids": [], "processed_fallback_keys": []}
 
 
 def save_checkpoint(data: dict) -> None:
     CHECKPOINT_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def make_fallback_email_key(email_data: dict) -> str:
+    """
+    Fallback dedupe key in case EntryID is missing or unstable.
+    """
+    base = "|".join([
+        email_data.get("sender_email", "") or "",
+        email_data.get("subject", "") or "",
+        email_data.get("received_time", "") or "",
+    ])
+    import hashlib
+    return hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()
 
 
 # ─── Classification keywords ────────────────────────────────────────────────
@@ -105,10 +118,18 @@ def classify_reply(subject: str, body: str, sender_email: str = "") -> str:
       - NOT_INTERESTED
       - MISC
     """
-    text = f"{subject or ''}\n{body or ''}\n{sender_email or ''}".lower()
+    subject = subject or ""
+    body = body or ""
+    sender_email = sender_email or ""
+
+    text = f"{subject}\n{body}\n{sender_email}".lower()
 
     def has_any(keywords: list[str]) -> bool:
         return any(k in text for k in keywords)
+
+    # Strong bounce heuristics first
+    if "mailer-daemon" in sender_email.lower() or "postmaster" in sender_email.lower():
+        return "UNDELIVERABLE"
 
     if has_any(UNDELIVERABLE_KEYWORDS):
         return "UNDELIVERABLE"
@@ -185,10 +206,11 @@ def _extract_phone(text: str) -> str:
 
 def shape_email(item) -> dict:
     """
-    Convert a COM Outlook item into a normalized dict for classification/logging.
+    Convert an Outlook COM item into one normalized dict for classification/logging.
     """
     subject = getattr(item, "Subject", "") or ""
     sender_name = getattr(item, "SenderName", "") or ""
+
     sender_email = ""
     try:
         sender_email = getattr(item, "SenderEmailAddress", "") or ""
@@ -196,6 +218,7 @@ def shape_email(item) -> dict:
         sender_email = ""
 
     body = getattr(item, "Body", "") or ""
+
     received_time = ""
     try:
         received_time = str(getattr(item, "ReceivedTime", "") or "")
@@ -250,63 +273,78 @@ class OutlookReader:
             ).GetNamespace("MAPI")
         return self._outlook
 
-    def read_inbox(self, days: int = 7, max_emails: int = 500,
+    def read_inbox(self, start_date: datetime = None, end_date: datetime = None, max_emails: int = 500,
                    folder_name: str = None) -> list:
         """
-        Read recent emails from inbox (or a named subfolder).
-
-        Returns list of dicts:
-            {from_name, from_email, subject, body, received,
-             classification, phone, has_attachment, message_id}
+        Read emails from inbox (or a named subfolder) within a date range.
+        Returns list of dicts.
         """
         ns = self._connect()
+        inbox = ns.GetDefaultFolder(6)  # 6 = Inbox
 
+        target_folder = inbox
         if folder_name:
-            inbox = ns.GetDefaultFolder(6)  # 6 = Inbox
-            folder = None
             for f in inbox.Folders:
                 if f.Name.lower() == folder_name.lower():
-                    folder = f
+                    target_folder = f
                     break
-            if not folder:
+            if target_folder == inbox:
                 print(f"  Folder '{folder_name}' not found. Using Inbox.")
-                folder = inbox
-        else:
-            folder = ns.GetDefaultFolder(6)
 
-        items = folder.Items
+        items = target_folder.Items
         items.Sort("[ReceivedTime]", True)  # newest first
 
-        cutoff = (datetime.now() - timedelta(days=days)).replace(tzinfo=None)
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=7)).replace(tzinfo=None)
+        if not end_date:
+            end_date = datetime.now().replace(tzinfo=None)
+            
         results = []
+        count = 0
 
-        for i, item in enumerate(items):
-            if i >= max_emails:
+        for item in items:
+            if count >= max_emails:
                 break
 
             try:
-                body = getattr(item, "Body", "") or ""
                 subject = getattr(item, "Subject", "") or ""
+                body = getattr(item, "Body", "") or ""
                 if not subject and not body:
                     continue
 
+                received_obj = getattr(item, "ReceivedTime", None)
+                if received_obj:
+                    try:
+                        received_naive = (
+                            received_obj.replace(tzinfo=None)
+                            if hasattr(received_obj, "tzinfo")
+                            else received_obj
+                        )
+                        if received_naive < start_date:
+                            break # We've gone past the start date, stop looking
+                        if received_naive > end_date:
+                            continue # Skip emails newer than the end date
+                    except Exception:
+                        pass
+
                 email_data = shape_email(item)
                 
-                try:
-                    received = item.ReceivedTime
-                    received_naive = (
-                        received.replace(tzinfo=None)
-                        if hasattr(received, "tzinfo")
-                        else received
-                    )
-                    if received_naive < cutoff:
-                        break
-                    email_data["received_time"] = received_naive.strftime("%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    pass
+                # Re-stamp normalized time
+                if received_obj:
+                    try:
+                        received_naive = (
+                            received_obj.replace(tzinfo=None)
+                            if hasattr(received_obj, "tzinfo")
+                            else received_obj
+                        )
+                        email_data["received_time"] = received_naive.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        pass
 
                 results.append(email_data)
-            except Exception:
+                count += 1
+            except Exception as exc:
+                print(f"[READ] Skipped one item: {exc}", flush=True)
                 continue
 
         return results
@@ -365,6 +403,140 @@ class OutlookReader:
         return folders
 
 
+def log_email_to_app(email_data: dict) -> None:
+    """
+    Log one normalized email into the app database using the existing outreach logger.
+    Adjust the imported logger name if needed for your project.
+    """
+    from core.database import log_outreach
+
+    log_outreach(
+        phone=email_data.get("phone", ""),
+        contact_name=email_data.get("sender_name", ""),
+        channel="email",
+        direction="inbound",
+        message=email_data.get("body", ""),
+        classification=email_data.get("classification", "MISC"),
+        timestamp=email_data.get("received_time", ""),
+    )
+
+
+def run_auto_loop(poll_seconds: int = 300, start_date_filter: datetime = None, end_date_filter: datetime = None, max_emails: int = 50, folder_name: str | None = None):
+    """
+    Continuous inbox polling loop with:
+    - EntryID dedupe
+    - fallback composite-key dedupe
+    - normalized email processing
+    - heartbeat
+    """
+    import time
+    try:
+        from runtime import write_tool_state, read_tool_state, touch_heartbeat
+        HAS_RUNTIME = True
+    except ImportError:
+        HAS_RUNTIME = False
+
+    if HAS_RUNTIME:
+        write_tool_state("outlook_reader", status="running")
+
+    checkpoint = load_checkpoint()
+    processed_entry_ids = set(checkpoint.get("processed_entry_ids", []))
+    processed_fallback_keys = set(checkpoint.get("processed_fallback_keys", []))
+
+    print("[AUTO] Outlook continuous monitor started", flush=True)
+
+    try:
+        reader = OutlookReader()
+        while True:
+            if HAS_RUNTIME:
+                try:
+                    state = read_tool_state("outlook_reader")
+                    if state.get("status") == "stopped_requested":
+                        break
+                except Exception:
+                    pass
+
+            loop_start = start_date_filter if start_date_filter else (datetime.now() - timedelta(days=1)).replace(tzinfo=None)
+            loop_end = end_date_filter if end_date_filter else datetime.now().replace(tzinfo=None)
+
+            emails = reader.read_inbox(start_date=loop_start, end_date=loop_end, max_emails=max_emails, folder_name=folder_name)
+
+            inserted = 0
+            duplicate_skipped = 0
+            failed = 0
+
+            for email_data in emails:
+                entry_id = email_data.get("entry_id", "") or ""
+                fallback_key = make_fallback_email_key(email_data)
+
+                already_seen = False
+                if entry_id and entry_id in processed_entry_ids:
+                    already_seen = True
+                elif fallback_key in processed_fallback_keys:
+                    already_seen = True
+
+                if already_seen:
+                    duplicate_skipped += 1
+                    continue
+
+                try:
+                    log_email_to_app(email_data)
+                    inserted += 1
+
+                    if entry_id:
+                        processed_entry_ids.add(entry_id)
+                    processed_fallback_keys.add(fallback_key)
+
+                except Exception as exc:
+                    failed += 1
+                    print(f"[AUTO] Failed to log email '{email_data.get('subject','')[:60]}': {exc}", flush=True)
+
+            checkpoint["processed_entry_ids"] = list(processed_entry_ids)[-5000:]
+            checkpoint["processed_fallback_keys"] = list(processed_fallback_keys)[-5000:]
+            save_checkpoint(checkpoint)
+
+            if HAS_RUNTIME:
+                try:
+                    touch_heartbeat("outlook_reader")
+                except Exception:
+                    pass
+
+            print(
+                f"  [{datetime.now().time().strftime('%H:%M:%S')}] Checked inbox | inserted={inserted} | duplicates={duplicate_skipped} | failed={failed}",
+                flush=True,
+            )
+
+            for _ in range(poll_seconds):
+                if HAS_RUNTIME:
+                    try:
+                        st = read_tool_state("outlook_reader")
+                        if st.get("status") == "stopped_requested":
+                            break
+                    except Exception:
+                        pass
+                time.sleep(1)
+            
+            if HAS_RUNTIME:
+                st = read_tool_state("outlook_reader")
+                if st.get("status") == "stopped_requested":
+                    break
+
+    except Exception as exc:
+        if HAS_RUNTIME:
+            try:
+                write_tool_state("outlook_reader", status="failed", error=str(exc))
+            except Exception:
+                pass
+        raise
+
+    if HAS_RUNTIME:
+        try:
+            write_tool_state("outlook_reader", status="stopped")
+        except Exception:
+            pass
+    print("  [AUTO] Gracefully stopped.", flush=True)
+
+
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -376,97 +548,40 @@ def main():
 
     reader = OutlookReader()
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--auto":
-        import time
+    if "--auto" in sys.argv:
+        start_date_filter = None
+        end_date_filter = None
         
-        try:
-            from runtime import write_tool_state, read_tool_state, touch_heartbeat
-            HAS_RUNTIME = True
-        except ImportError:
-            HAS_RUNTIME = False
+        if "--prompt-config" in sys.argv:
+            ans = input("\n  Do you want to reset the checkpoint and re-read old emails? (y/N): ").strip().lower()
+            if ans == 'y':
+                if CHECKPOINT_PATH.exists():
+                    CHECKPOINT_PATH.unlink()
+                print("  Checkpoint reset!")
+                
+            print("\n  Set the date range for emails to read.")
+            print("  Format: YYYY-MM-DD (e.g., 2024-01-15)")
+            print("  Leave blank to read everything from the last 7 days.\n")
             
-        try:
-            from core.database import log_outreach
-            HAS_DB = True
-        except ImportError:
-            HAS_DB = False
-
-        if HAS_RUNTIME:
-            write_tool_state("outlook_reader", status="running")
-            
-        checkpoint = load_checkpoint()
-        processed_entry_ids = set(checkpoint.get("processed_entry_ids", []))
-
-        print("\n  [AUTO] Starting continuous inbox monitoring...")
-        print("  Checking for new replies every 5 minutes.\n")
-        
-        try:
-            while True:
-                if HAS_RUNTIME:
-                    state = read_tool_state("outlook_reader")
-                    if state.get("status") == "stopped_requested":
-                        break
-                        
-                emails = reader.read_inbox(days=1, max_emails=50)
-                
-                saved_count = 0
-                if HAS_DB:
-                    for email_data in emails:
-                        entry_id = email_data.get("entry_id", "")
-                        if entry_id and entry_id in processed_entry_ids:
-                            continue
-
-                        # Prevent logging empty emails
-                        if not email_data.get("sender_email") and not email_data.get("subject"):
-                            continue
-                            
-                        try:
-                            log_outreach(
-                                channel="email",
-                                direction="inbound",
-                                message=email_data.get("body", "")[:2000],
-                                contact_name=email_data.get("sender_name", ""),
-                                phone=email_data.get("phone", ""),
-                                classification=email_data.get("classification", "MISC"),
-                                timestamp=email_data.get("received_time", ""),
-                            )
-                            saved_count += 1
-                            if entry_id:
-                                processed_entry_ids.add(entry_id)
-                        except Exception as log_err:
-                            pass
-                
-                checkpoint["processed_entry_ids"] = list(processed_entry_ids)[-5000:]
-                save_checkpoint(checkpoint)
-                
-                if HAS_RUNTIME:
-                    touch_heartbeat("outlook_reader")
-
-                print(f"  [{datetime.now().time().strftime('%H:%M:%S')}] Checked inbox. Found {len(emails)} recent. Inserted {saved_count} new email(s).")
-                
-                # Check bounds before sleep if stop requested
-                # Sleep in increments so it can stop faster
-                for _ in range(300):
-                    if HAS_RUNTIME:
-                        st = read_tool_state("outlook_reader")
-                        if st.get("status") == "stopped_requested":
-                            break
-                    time.sleep(1)
+            raw_start = input("  Read emails FROM (Start Date): ").strip()
+            if raw_start:
+                try:
+                    start_date_filter = datetime.strptime(raw_start, "%Y-%m-%d")
+                    print(f"  Start date set to: {start_date_filter.strftime('%Y-%m-%d')}")
+                except ValueError:
+                    print("  Invalid format. Using default start date (7 days ago).")
                     
-                if HAS_RUNTIME:
-                    st = read_tool_state("outlook_reader")
-                    if st.get("status") == "stopped_requested":
-                        break
-                        
-        except Exception as e:
-            if HAS_RUNTIME:
-                write_tool_state("outlook_reader", status="failed", error=str(e))
-            print(f"  [ERROR] Outlook Reader crashed: {e}")
-            return
-            
-        if HAS_RUNTIME:
-            write_tool_state("outlook_reader", status="stopped")
-        print("  [AUTO] Gracefully stopped.")
+            raw_end = input("  Read emails TO (End Date): ").strip()
+            if raw_end:
+                try:
+                    # Set the end date to the very end of the specified day
+                    parsed_end = datetime.strptime(raw_end, "%Y-%m-%d")
+                    end_date_filter = parsed_end.replace(hour=23, minute=59, second=59)
+                    print(f"  End date set to: {end_date_filter.strftime('%Y-%m-%d 23:59:59')}")
+                except ValueError:
+                    print("  Invalid format. Using default end date (Now).")
+
+        run_auto_loop(poll_seconds=300, start_date_filter=start_date_filter, end_date_filter=end_date_filter)
         return
 
     # Show available folders
@@ -474,37 +589,77 @@ def main():
     print(f"\n  Available folders: {', '.join(folders)}")
 
     # Read recent emails
-    days = 7
-    raw = input(f"\n  How many days back? (default {days}): ").strip()
-    if raw.isdigit():
-        days = int(raw)
+    start_date = None
+    end_date = None
+    
+    print("\n  Format: YYYY-MM-DD (e.g., 2024-01-15)")
+    print("  Leave blank for defaults.\n")
+    
+    raw_start = input("  Read emails FROM (Start Date): ").strip()
+    if raw_start:
+        try:
+            start_date = datetime.strptime(raw_start, "%Y-%m-%d")
+        except ValueError:
+            print("  Invalid format. Using default.")
+            
+    raw_end = input("  Read emails TO (End Date): ").strip()
+    if raw_end:
+        try:
+            parsed_end = datetime.strptime(raw_end, "%Y-%m-%d")
+            end_date = parsed_end.replace(hour=23, minute=59, second=59)
+        except ValueError:
+            print("  Invalid format. Using default.")
 
-    print(f"\n  Reading inbox (last {days} days)...\n")
-    emails = reader.read_inbox(days=days)
+    if not start_date:
+        days = 7
+        raw = input(f"\n  How many days back? (default {days}): ").strip()
+        if raw.isdigit():
+            days = int(raw)
+        start_date = (datetime.now() - timedelta(days=days)).replace(tzinfo=None)
+
+    if not end_date:
+        end_date = datetime.now().replace(tzinfo=None)
+
+    print(f"\n  Reading inbox from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...\n")
+    emails = reader.read_inbox(start_date=start_date, end_date=end_date)
 
     if not emails:
         print("  No emails found.\n")
         return
 
-    # Summary by classification
-    from collections import Counter
-    counts = Counter(e["classification"] for e in emails)
-    print(f"  Found {len(emails)} emails:")
-    for cls, cnt in sorted(counts.items()):
-        print(f"    {cls:20s} — {cnt}")
+    def print_email_summary(emails: list[dict], only_non_misc: bool = False) -> None:
+        rows = emails
+        if only_non_misc:
+            rows = [e for e in rows if e.get("classification") != "MISC"]
+
+        print(f"\nFound {len(rows)} email(s):\n")
+        for e in rows:
+            subj = (e.get("subject") or "—")[:70]
+            sender = (e.get("sender_name") or e.get("sender_email") or "—")[:40]
+            cls = e.get("classification") or "MISC"
+            phone = e.get("phone") or "—"
+            ts = e.get("received_time") or "—"
+
+            print(f"Subject : {subj}")
+            print(f"From    : {sender}")
+            print(f"Class   : {cls}")
+            print(f"Phone   : {phone}")
+            print(f"Received: {ts}")
+            print("-" * 60)
+
+    print("\nOptions:")
+    print("  1) Read recent inbox emails")
+    print("  2) Read recent inbox emails (non-MISC only)")
     print()
 
-    # Show interesting ones
-    interesting = [e for e in emails if e["classification"] not in ("UNKNOWN",)]
-    if interesting:
-        print(f"  Classified emails ({len(interesting)}):")
-        print(f"  {'─' * 52}")
-        for e in interesting[:30]:
-            subj = e["subject"][:45] + ("..." if len(e["subject"]) > 45 else "")
-            print(f"  [{e['classification']:17s}] {e['from_name'][:20]:20s} | {subj}")
-        if len(interesting) > 30:
-            print(f"  ... and {len(interesting) - 30} more")
-    print()
+    choice = input("  -> ").strip()
+
+    if choice == "1":
+        print_email_summary(emails, only_non_misc=False)
+    elif choice == "2":
+        print_email_summary(emails, only_non_misc=True)
+    else:
+        print("Unknown option.")
 
 
 if __name__ == "__main__":
