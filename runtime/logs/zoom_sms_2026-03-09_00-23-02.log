@@ -1,0 +1,16 @@
+
+==========================================================
+  ZOOM SMS READER
+==========================================================
+[00:23:03] [AUTO] Full scan (DB + screen scrape)...
+Traceback (most recent call last):
+  File "C:\Users\PrintMan\.gemini\antigravity\scratch\crm_scraper\zoom_sms\zoom_reader.py", line 829, in main
+    results = reader.run_full_scan()
+  File "C:\Users\PrintMan\.gemini\antigravity\scratch\crm_scraper\zoom_sms\zoom_reader.py", line 735, in run_full_scan
+    print("\n  \u2550\u2550 ZOOM SMS FULL SCAN \u2550\u2550\n")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\PrintMan\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 4-5: character maps to <undefined>
+[00:23:03] [ERROR] Runtime error: 'charmap' codec can't encode characters in position 4-5: character maps to <undefined>

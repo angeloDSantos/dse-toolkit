@@ -373,6 +373,21 @@ def launch_tool(tool):
             flash(f"{tool} is already running", "warning")
             return redirect(url_for("outreach"))
 
+        # --- ZOOM SMS Calibration Check ---
+        if tool == "zoom_sms":
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zoom_reader_config.json")
+            if not os.path.exists(config_path):
+                # Start the interactive wizard in a new visible shell window
+                import subprocess
+                subprocess.Popen(
+                    f'start cmd /k "echo Zoom Setup Wizard && python zoom_sms/zoom_reader.py setup_wizard"',
+                    shell=True,
+                    cwd=os.path.dirname(os.path.abspath(__file__))
+                )
+                flash("Zoom SMS needs calibration first! Please complete the setup in the new terminal window, then try launching again.", "warning")
+                return redirect(url_for("outreach"))
+        # ----------------------------------
+
         proc, _ = runtime.launch_tool(
             tool,
             ["python", script, "--auto"],

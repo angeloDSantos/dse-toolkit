@@ -1,0 +1,27 @@
+
+==========================================================
+  ZOOM SMS READER
+==========================================================
+[00:32:06] [AUTO] Full scan (DB + screen scrape)...
+
+  == ZOOM SMS FULL SCAN ==
+
+  Phase 1 - Direct database scan
+  [db] Found 34 Zoom .db file(s) total
+  [db] Scanning: C:\Users\PrintMan\AppData\Roaming\Zoom\data\zoomus.zmdb.default.noenc.rlock.db
+    [db] experiment: no phone/body columns - skipping
+       -> 0 message rows
+  [db] No SMS messages found in any database.
+  DB scan: 0 conversations
+
+  Phase 2 - Screen scrape (supplements DB)
+  [screen] Bringing Zoom to the front...
+  [screen] Zoom window: (0,0) -> (1920,1080)
+  [screen] Starting bulk scan (max 200)...
+  [screen] [  1] No phone number extracted - skipping.
+  [screen] Pane unchanged 3× - reached end of list.
+  [screen] Done - 0 new conversations captured.
+  Screen scan added 0 new conversation(s)
+
+  Total saved: 0
+[00:32:19] No conversations found.

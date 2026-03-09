@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "C:\Users\PrintMan\.gemini\antigravity\scratch\crm_scraper\zoom_sms\zoom_reader.py", line 827, in main
+    reader = ZoomReader()
+  File "C:\Users\PrintMan\.gemini\antigravity\scratch\crm_scraper\zoom_sms\zoom_reader.py", line 728, in __init__
+    _init_convo_db()
+    ^^^^^^^^^^^^^^
+NameError: name '_init_convo_db' is not defined
+
+==========================================================
+  ZOOM SMS READER
+==========================================================
+[00:12:53] [ERROR] Runtime error: name '_init_convo_db' is not defined

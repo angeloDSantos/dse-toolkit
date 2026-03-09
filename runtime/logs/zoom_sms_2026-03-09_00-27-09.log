@@ -1,0 +1,25 @@
+
+==========================================================
+  ZOOM SMS READER
+==========================================================
+[00:27:10] [AUTO] Full scan (DB + screen scrape)...
+Traceback (most recent call last):
+  File "C:\Users\PrintMan\.gemini\antigravity\scratch\crm_scraper\zoom_sms\zoom_reader.py", line 829, in main
+    results = reader.run_full_scan()
+  File "C:\Users\PrintMan\.gemini\antigravity\scratch\crm_scraper\zoom_sms\zoom_reader.py", line 739, in run_full_scan
+    db_res = scan_zoom_databases()
+  File "C:\Users\PrintMan\.gemini\antigravity\scratch\crm_scraper\zoom_sms\zoom_reader.py", line 281, in scan_zoom_databases
+    print(f"       \u2192 {len(msgs)} message rows")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\PrintMan\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 7: character maps to <undefined>
+
+  == ZOOM SMS FULL SCAN ==
+
+  Phase 1 — Direct database scan
+  [db] Found 34 Zoom .db file(s) total
+  [db] Scanning: C:\Users\PrintMan\AppData\Roaming\Zoom\data\zoomus.zmdb.default.noenc.rlock.db
+    [db] experiment: no phone/body columns — skipping
+[00:27:10] [ERROR] Runtime error: 'charmap' codec can't encode character '\u2192' in position 7: character maps to <undefined>
